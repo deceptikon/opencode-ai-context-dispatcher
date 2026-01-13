@@ -1,0 +1,57 @@
+#!/bin/bash
+# Wrapper for opencode with context injection
+
+set -e
+
+PROJECT_ID="$1"
+shift
+COMMAND="$*"
+
+if [[ -z "$PROJECT_ID" ]] || [[ -z "$COMMAND" ]]; then
+    echo "Usage: opencode-with-context <project_id> <opencode_command>"
+    echo ""
+    echo "Arguments:"
+    echo "  project_id       The project ID (use 'ctx list' to see available projects)"
+    echo "  opencode_command The command to pass to opencode"
+    exit 1
+fi
+
+# Load context dispatcher
+if [[ -f "$HOME/.opencode/context-dispatcher.zsh" ]]; then
+    source "$HOME/.opencode/context-dispatcher.zsh"
+else
+    echo "Error: Context dispatcher not found. Please run install-context-dispatcher.sh first."
+    exit 1
+fi
+
+# Verify project exists
+PROJECT_DIR="$HOME/.opencode/context/projects/$PROJECT_ID"
+if [[ ! -d "$PROJECT_DIR" ]]; then
+    echo "Error: Project '$PROJECT_ID' not found."
+    echo "Use 'ctx list' to see available projects or 'ctx init <path>' to create one."
+    exit 1
+fi
+
+# Get relevant context
+CONTEXT=$(get_context "$PROJECT_ID" "" 20)
+
+# Create temporary context file
+CONTEXT_FILE="/tmp/opencode_context_$$.txt"
+{
+    echo "=== PROJECT CONTEXT ==="
+    echo "$CONTEXT"
+    echo ""
+    echo "=== COMMAND ==="
+    echo "$COMMAND"
+} > "$CONTEXT_FILE"
+
+# Run opencode with context
+opencode --context-file "$CONTEXT_FILE"
+
+# Cleanup
+rm -f "$CONTEXT_FILE"
+
+# Save the interaction to agent context
+if [[ -n "$AGENT_NAME" ]]; then
+    save_agent_context "$AGENT_NAME" "Ran: $COMMAND with context from $PROJECT_ID"
+fi
