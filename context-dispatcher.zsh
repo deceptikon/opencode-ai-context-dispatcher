@@ -20,6 +20,12 @@ detect_platform() {
 }
 PLATFORM=$(detect_platform)
 
+# Cache command paths to avoid lookup issues in some shell configurations
+JQ_CMD="${JQ_CMD:-$(command -v jq)}"
+RG_CMD="${RG_CMD:-$(command -v rg)}"
+BASENAME_CMD="${BASENAME_CMD:-$(command -v basename)}"
+DIRNAME_CMD="${DIRNAME_CMD:-$(command -v dirname)}"
+
 # Cross-platform stat: get modification time
 get_mtime() {
     local file="$1"
@@ -109,7 +115,7 @@ get_project_embeddings() {
 # --------------------------------------------------------
 init_context() {
     local project_path="$1"
-    local project_name="${2:-$(basename "$project_path")}"
+    local project_name="${2:-$($BASENAME_CMD "$project_path")}"
     
     if [[ ! -d "$project_path" ]]; then
         log "❌ Error: Project path '$project_path' does not exist"
@@ -165,7 +171,7 @@ update_context() {
     fi
     
     local config_path="$project_dir/config.json"
-    local project_path=$(jq -r '.path' "$config_path")
+    local project_path=$($JQ_CMD -r ".path" "$config_path")
     
     # Validate project path exists
     if [[ ! -d "$project_path" ]]; then
@@ -206,7 +212,7 @@ update_git_context() {
     done
     
     # Update timestamp
-    jq --arg timestamp "$(date -Iseconds)" '.last_indexed = $timestamp' \
+    $JQ_CMD --arg timestamp "$(date -Iseconds)" ".last_indexed = \$timestamp" \
         "$project_dir/config.json" > "$project_dir/config.tmp" \
         && mv "$project_dir/config.tmp" "$project_dir/config.json"
     
@@ -235,7 +241,7 @@ update_file_context() {
     done
     
     # Update timestamp
-    jq --arg timestamp "$(date -Iseconds)" '.last_indexed = $timestamp' \
+    $JQ_CMD --arg timestamp "$(date -Iseconds)" ".last_indexed = \$timestamp" \
         "$project_dir/config.json" > "$project_dir/config.tmp" \
         && mv "$project_dir/config.tmp" "$project_dir/config.json"
     
@@ -255,9 +261,9 @@ reindex_context() {
     fi
     
     local config_path="$project_dir/config.json"
-    local project_path=$(jq -r '.path' "$config_path")
-    local exclude_patterns=($(jq -r '.exclude_patterns[]' "$config_path"))
-    local include_extensions=($(jq -r '.include_extensions[]' "$config_path"))
+    local project_path=$($JQ_CMD -r ".path" "$config_path")
+    local exclude_patterns=($($JQ_CMD -r ".exclude_patterns[]" "$config_path"))
+    local include_extensions=($($JQ_CMD -r ".include_extensions[]" "$config_path"))
     
     log "Starting full reindex of $project_path..."
     
@@ -296,7 +302,7 @@ reindex_context() {
     done
     
     # Update timestamp
-    jq --arg timestamp "$(date -Iseconds)" '.last_indexed = $timestamp' \
+    $JQ_CMD --arg timestamp "$(date -Iseconds)" ".last_indexed = \$timestamp" \
         "$project_dir/config.json" > "$project_dir/config.tmp" \
         && mv "$project_dir/config.tmp" "$project_dir/config.json"
     
@@ -311,7 +317,7 @@ index_single_file() {
     
     local project_dir="$PROJECTS_DIR/$project_id"
     local index_file="$project_dir/index.json"
-    local chunk_size=$(jq -r '.chunk_size' "$project_dir/config.json")
+    local chunk_size=$($JQ_CMD -r ".chunk_size" "$project_dir/config.json")
     
     # Create index file if doesn't exist
     if [[ ! -f "$index_file" ]]; then
@@ -358,7 +364,7 @@ index_single_file() {
     local temp_file="$index_file.tmp"
     
     # Add file metadata
-    jq --arg path "$rel_path" \
+    $JQ_CMD --arg path "$rel_path" \
        --arg modified "$(get_mtime "$file_path")" \
        --arg size "$(get_fsize "$file_path")" \
        '.files[$path] = {"modified": $modified, "size": $size, "chunks": []}' \
@@ -419,7 +425,7 @@ get_context() {
         jq -r ".chunks[-${limit}:][] | .content" "$index_file"
     else
         # Search with ripgrep
-        local search_result=$(rg -i "$query" "$index_file" -C 2 | head -c 8000)
+        local search_result=$($RG_CMD -i "$query" "$index_file" -C 2 | head -c 8000)
         if [[ -n "$search_result" ]]; then
             echo "$search_result"
         else
@@ -455,7 +461,7 @@ save_agent_context() {
     local entry_id=$(generate_uuid)
     
     # Create entry
-    local entry=$(jq -n \
+    local entry=$($JQ_CMD -n \
         --arg id "$entry_id" \
         --arg text "$context_text" \
         --arg tags "$tags" \
@@ -490,10 +496,10 @@ search_agent_context() {
     
     if [[ -z "$query" ]]; then
         # Return last 10 entries
-        tail -n 10 "$agent_file" | jq -r '.text'
+        tail -n 10 "$agent_file" | $JQ_CMD -r ".text"
     else
         # Search in agent's context
-        grep -i "$query" "$agent_file" | tail -5 | jq -r '.text'
+        grep -i "$query" "$agent_file" | tail -5 | $JQ_CMD -r ".text"
     fi
 }
 
@@ -501,13 +507,15 @@ search_agent_context() {
 # Utility Commands
 # --------------------------------------------------------
 list_projects() {
-    echo "📁 Managed Projects:"
+    echo "Managed Projects:"
+    local name path last project_id
     for project_dir in "$PROJECTS_DIR"/*; do
         if [[ -f "$project_dir/config.json" ]]; then
-            local name=$(jq -r '.name' "$project_dir/config.json")
-            local path=$(jq -r '.path' "$project_dir/config.json")
-            local last=$(jq -r '.last_indexed // "never"' "$project_dir/config.json")
-            echo "  • $name ($(basename "$project_dir"))"
+            name=$($JQ_CMD -r ".name" "$project_dir/config.json")
+            path=$($JQ_CMD -r ".path" "$project_dir/config.json")
+            last=$($JQ_CMD -r ".last_indexed // \"never\"" "$project_dir/config.json")
+            project_id=$($BASENAME_CMD "$project_dir")
+            echo "  - $name ($project_id)"
             echo "    Path: $path"
             echo "    Last indexed: $last"
             echo
@@ -531,12 +539,10 @@ project_stats() {
         return
     fi
     
-    echo "📊 Project Statistics:"
-    jq -r '
-        "Files: (.files | length)",
-        "Chunks: (.chunks | length)",
-        "Total size: (.chunks | map(.content | length) | add) chars"
-    ' "$index_file"
+    echo "Project Statistics:"
+    echo "  Files: $($JQ_CMD ".files | length" "$index_file")"
+    echo "  Chunks: $($JQ_CMD ".chunks | length" "$index_file")"
+    echo "  Total size: $($JQ_CMD "[.chunks[].content | length] | add" "$index_file") chars"
 }
 
 cleanup_old_context() {
