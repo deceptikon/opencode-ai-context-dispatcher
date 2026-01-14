@@ -18,7 +18,7 @@ show_help() {
     echo ""
     echo "Options:"
     echo "  -c, --context MODE   Context mode: full, rules, code, docs (default: full)"
-    echo "  -m, --model MODEL    Model to use (e.g., anthropic/claude-sonnet-4-20250514)"
+    echo "  -m, --model MODEL    Model to use (default: ollama/mistral for free testing)"
     echo "  -a, --agent AGENT    Agent to use (enables tool access)"
     echo "  -i, --interactive    Start interactive TUI instead of run mode (has tools)"
     echo "  -q, --quiet          Don't show context summary"
@@ -42,7 +42,7 @@ show_help() {
 
 # Parse arguments
 CONTEXT_MODE="full"
-MODEL=""
+MODEL="opencode/big-pickle"  # Default model for testing
 AGENT=""
 INTERACTIVE=false
 QUIET=false
@@ -97,6 +97,10 @@ fi
 
 if [[ -z "$MESSAGE" ]]; then
     # If no message, default to interactive mode (provides tool access)
+    INTERACTIVE=true
+else
+    # If message provided, ALSO use interactive mode (with --prompt flag)
+    # This gives the agent tool access while passing the message as a prompt
     INTERACTIVE=true
 fi
 
