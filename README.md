@@ -10,7 +10,7 @@ A shell-based context management system for AI coding agents. Automatically inde
 - **Manual documentation support** (rules, docs, notes, prompts)
 - Agent-specific context storage and retrieval
 - Cross-platform support (Linux/macOS)
-- **Optional: ChromaDB + LlamaIndex integration for semantic search**
+- **Optional: ChromaDB + LlamaIndex for semantic search**
 
 ## Installation
 
@@ -20,16 +20,15 @@ cd opencode-ai-context-dispatcher
 ./install-context-dispatcher.sh
 ```
 
+The installer will:
+1. Install shell dependencies (`jq`, `ripgrep`)
+2. Set up the context dispatcher
+3. Optionally install Python dependencies for semantic search
+
 Restart your shell or run:
 ```bash
 source ~/.zshrc
 ```
-
-### Dependencies
-
-Automatically installed if missing:
-- `jq` - JSON processing
-- `ripgrep` (`rg`) - Fast content searching
 
 ## Quick Start
 
@@ -49,7 +48,7 @@ ctx add-doc <project_id> doc "API uses REST with JSON responses" "API Docs"
 ctx get-full <project_id>
 ```
 
-## Usage
+## Core Commands
 
 ### Project Management
 
@@ -65,13 +64,13 @@ ctx stats <project_id>      # Show statistics
 
 ```bash
 ctx get <project_id>              # Get code context
-ctx get <project_id> "query"      # Search code context
+ctx get <project_id> "query"      # Search code context (keyword-based)
 ctx get-full <project_id>         # Get everything (code + docs + rules)
 ```
 
 ### Documentation & Rules
 
-Add business logic, rules, documentation, and custom prompts:
+Add business logic, rules, documentation, and custom prompts that persist alongside your code context:
 
 ```bash
 # Add inline content
@@ -97,19 +96,6 @@ ctx edit-doc <project_id> <doc_id>   # Edit in $EDITOR
 ctx rm-doc <project_id> <doc_id>     # Remove a doc
 ```
 
-### Agent Context
-
-```bash
-ctx save-agent <name> <text> [tags]  # Save agent-specific context
-ctx search-agent <name> [query]      # Search agent context
-```
-
-### Run OpenCode with Context
-
-```bash
-ocx <project_id> "your prompt here"
-```
-
 ### Maintenance
 
 ```bash
@@ -117,15 +103,42 @@ ctx cleanup [days]    # Remove old context (default: 30 days)
 ctx help              # Show all commands
 ```
 
-## Uninstallation
+## Semantic Search with ChromaDB + LlamaIndex
 
-```bash
-./uninstall-context-dispatcher.sh
+### Why Use Semantic Search?
+
+The shell-based context (`ctx get`) uses **keyword matching** - it finds exact text matches. This works well for:
+- Finding specific function names
+- Searching for exact error messages
+- Locating imports and exports
+
+**Semantic search** (ChromaDB) understands **meaning**, not just keywords. Use it when you want to:
+
+| Use Case | Keyword Search | Semantic Search |
+|----------|---------------|-----------------|
+| "Find the `handleAuth` function" | Works great | Works |
+| "Find code that handles authentication" | Might miss code that uses `login`, `session`, `jwt` | Finds all related code |
+| "How does payment processing work?" | Returns nothing useful | Returns relevant code + explanation |
+| "Find similar code to this pattern" | Can't do this | Can find conceptually similar code |
+
+### When to Use What
+
 ```
+Shell-only (ctx get):
+├── Fast, no dependencies
+├── Good for: exact matches, specific names
+└── Example: "find useState", "find class UserService"
 
-## Vector Search Extension (ChromaDB + LlamaIndex)
+ChromaDB (vector_store.py search):
+├── Semantic/meaning-based search
+├── Good for: conceptual queries, finding related code
+└── Example: "code that validates user input", "error handling patterns"
 
-For semantic search capabilities, use the Python extension:
+LlamaIndex (vector_store.py query):
+├── RAG - Retrieval Augmented Generation
+├── Good for: questions that need synthesized answers
+└── Example: "how does the auth flow work?", "explain the API structure"
+```
 
 ### Setup
 
@@ -136,42 +149,71 @@ pip install chromadb llama-index llama-index-vector-stores-chroma
 ### Usage
 
 ```bash
-# Index project into ChromaDB
-python extensions/vector_store.py index <project_id>
+# Index your project into the vector database
+python ~/.opencode/extensions/vector_store.py index <project_id>
 
-# Semantic search
-python extensions/vector_store.py search <project_id> "how does auth work"
+# Or index directly from filesystem (better for large projects)
+python ~/.opencode/extensions/vector_store.py index-dir <project_id>
 
-# Search with LlamaIndex (better answers)
-python extensions/vector_store.py search-llama <project_id> "explain the API structure"
+# Semantic search - find by meaning
+python ~/.opencode/extensions/vector_store.py search <project_id> "authentication logic"
+python ~/.opencode/extensions/vector_store.py search <project_id> "database queries" -t code
+python ~/.opencode/extensions/vector_store.py search <project_id> "coding standards" -t rule
 
-# Get stats
-python extensions/vector_store.py stats <project_id>
+# RAG query - ask questions, get answers with sources
+python ~/.opencode/extensions/vector_store.py query <project_id> "how does the payment flow work?"
 
-# Sync after adding new docs
-python extensions/vector_store.py sync <project_id>
+# Re-sync after adding new docs
+python ~/.opencode/extensions/vector_store.py sync <project_id>
+
+# Check what's indexed
+python ~/.opencode/extensions/vector_store.py stats <project_id>
 ```
 
 ### Options
 
-```bash
+```
 -n, --num-results    Number of results (default: 5)
 -t, --type           Filter by type (code/rule/doc/note/prompt)
---json               Output as JSON
+--json               Output as JSON for scripting
+```
+
+### Example Workflow
+
+```bash
+# 1. Set up project with shell context
+ctx init ~/projects/myapp "My App"
+ctx reindex abc123
+
+# 2. Add business rules and docs
+ctx add-doc abc123 rule "Use dependency injection for all services" "DI Rule"
+ctx add-file abc123 doc ./docs/architecture.md "Architecture"
+
+# 3. Index into vector store for semantic search
+python ~/.opencode/extensions/vector_store.py index abc123
+
+# 4. Now you can search by meaning
+python ~/.opencode/extensions/vector_store.py search abc123 "how to add a new API endpoint"
+
+# 5. Or ask questions
+python ~/.opencode/extensions/vector_store.py query abc123 "what patterns does this codebase use for error handling?"
 ```
 
 ## File Structure
 
 ```
 ~/.opencode/
-├── context-dispatcher.zsh
+├── context-dispatcher.zsh    # Main script
+├── extensions/
+│   ├── vector_store.py       # ChromaDB + LlamaIndex extension
+│   └── ctx-vector            # Shell wrapper
 ├── context/
-│   ├── projects/<project_id>/
+│   ├── projects/<id>/
 │   │   ├── config.json       # Project settings
 │   │   └── index.json        # Indexed code chunks
-│   ├── docs/<project_id>/
+│   ├── docs/<id>/
 │   │   └── docs.jsonl        # Manual docs/rules/notes
-│   ├── vectors/<project_id>/ # ChromaDB storage (if using extension)
+│   ├── vectors/<id>/         # ChromaDB storage
 │   ├── agents/               # Agent-specific context
 │   ├── cache/                # Shared cache
 │   └── logs/                 # System logs
@@ -198,7 +240,7 @@ Always check the rules before making changes. The context includes:
 Verify against actual files as context may be summarized.
 ```
 
-### System Prompt with Rules
+### System Prompt with Injected Rules
 
 ```
 You are an AI coding assistant for this project. Follow these guidelines:
@@ -218,21 +260,23 @@ When making changes:
 3. Check existing code patterns before creating new ones
 ```
 
-### Interactive Agent Prompt
+### Interactive Agent with Semantic Search
 
 ```
 You have access to a context management system. Available commands:
 
-Project Context:
-- ctx get-full PROJECT_ID     # Complete context
-- ctx get PROJECT_ID "query"  # Search code
+Keyword Search (fast, exact matches):
+- ctx get PROJECT_ID "query"      # Search code
+- ctx get-docs PROJECT_ID rule    # Get rules
+- ctx get-full PROJECT_ID         # Everything
 
-Documentation:
-- ctx get-docs PROJECT_ID rule   # Project rules
-- ctx get-docs PROJECT_ID doc    # Documentation
-- ctx list-docs PROJECT_ID       # List all docs
+Semantic Search (meaning-based, requires ChromaDB):
+- python ~/.opencode/extensions/vector_store.py search PROJECT_ID "query"
+- python ~/.opencode/extensions/vector_store.py query PROJECT_ID "question"
 
-Use these to gather context before making changes. Always check rules first.
+Use keyword search for specific names/patterns.
+Use semantic search for conceptual questions like "how does X work?"
+
 Current project ID: {project_id}
 ```
 
@@ -245,7 +289,7 @@ Project config (`~/.opencode/context/projects/<id>/config.json`):
     "name": "Project Name",
     "path": "/path/to/project",
     "exclude_patterns": ["node_modules", ".git", "dist", "build"],
-    "include_extensions": [".js", ".ts", ".py", ".rs"],
+    "include_extensions": [".js", ".ts", ".py", ".rs", ".zsh", ".sh"],
     "chunk_size": 2000,
     "max_files": 1000
 }
@@ -267,15 +311,29 @@ Check project path and file extensions:
 cat ~/.opencode/context/projects/<project_id>/config.json
 ```
 
-### Character encoding errors
+### jq parse errors
+
+Usually caused by control characters in input. The script now sanitizes inputs automatically. If you have an old corrupted project, remove and re-initialize:
+```bash
+rm -rf ~/.opencode/context/projects/<project_id>
+ctx init /path/to/project "Name"
+```
+
+### Character encoding errors during reindex
 
 Non-fatal warnings from files with special characters. The script uses `LC_ALL=C` to handle them.
 
-### ChromaDB errors
+### ChromaDB/LlamaIndex errors
 
 Ensure dependencies are installed:
 ```bash
 pip install chromadb llama-index llama-index-vector-stores-chroma
+```
+
+## Uninstallation
+
+```bash
+./uninstall-context-dispatcher.sh
 ```
 
 ## License

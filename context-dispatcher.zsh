@@ -110,15 +110,32 @@ get_project_embeddings() {
     echo "$PROJECTS_DIR/$project_id/embeddings"
 }
 
+# Helper: Sanitize string for JSON (remove control characters, escape quotes)
+sanitize_for_json() {
+    local input="$1"
+    # Remove control characters (newlines, tabs, etc) and trim whitespace
+    echo "$input" | tr -d '\n\r\t' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/"/\\"/g'
+}
+
 # --------------------------------------------------------
 # Handler 1: Initialize Codebase Context
 # --------------------------------------------------------
 init_context() {
-    local project_path="$1"
-    local project_name="${2:-$($BASENAME_CMD "$project_path")}"
+    local raw_path="$1"
+    local raw_name="$2"
+    
+    # Sanitize inputs
+    local project_path=$(sanitize_for_json "$raw_path")
+    local project_name="${raw_name:-$($BASENAME_CMD "$project_path")}"
+    project_name=$(sanitize_for_json "$project_name")
+    
+    if [[ -z "$project_path" ]]; then
+        log "Error: Project path is required"
+        return 1
+    fi
     
     if [[ ! -d "$project_path" ]]; then
-        log "❌ Error: Project path '$project_path' does not exist"
+        log "Error: Project path '$project_path' does not exist"
         return 1
     fi
     
@@ -127,34 +144,26 @@ init_context() {
     
     mkdir -p "$project_dir"
     
-    # Create config
-    cat > "$project_dir/config.json" << EOF
-{
-    "name": "$project_name",
-    "path": "$project_path",
-    "id": "$project_id",
-    "created": "$(date -Iseconds)",
-    "last_indexed": null,
-    "indexing_strategy": "git_latest+function_extract",
-    "exclude_patterns": [
-        "node_modules",
-        ".git",
-        "dist",
-        "build",
-        "*.log",
-        "*.tmp"
-    ],
-    "include_extensions": [
-        ".js", ".jsx", ".ts", ".tsx", ".py", ".rs",
-        ".go", ".java", ".cpp", ".c", ".h", ".hpp",
-        ".rb", ".php", ".swift", ".kt", ".scala"
-    ],
-    "chunk_size": 2000,
-    "max_files": 1000
-}
-EOF
+    # Create config using jq for proper JSON escaping
+    $JQ_CMD -n \
+        --arg name "$project_name" \
+        --arg path "$project_path" \
+        --arg id "$project_id" \
+        --arg created "$(date -Iseconds)" \
+        '{
+            name: $name,
+            path: $path,
+            id: $id,
+            created: $created,
+            last_indexed: null,
+            indexing_strategy: "git_latest+function_extract",
+            exclude_patterns: ["node_modules", ".git", "dist", "build", "*.log", "*.tmp"],
+            include_extensions: [".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".cpp", ".c", ".h", ".hpp", ".rb", ".php", ".swift", ".kt", ".scala", ".zsh", ".sh", ".bash"],
+            chunk_size: 2000,
+            max_files: 1000
+        }' > "$project_dir/config.json"
     
-    log "✅ Initialized context for '$project_name' (ID: $project_id)"
+    log "Initialized context for '$project_name' (ID: $project_id)"
     echo "$project_id"
 }
 
@@ -333,9 +342,12 @@ index_single_file() {
         echo '{"files": {}, "chunks": [], "stats": {}}' > "$index_file"
     fi
     
-    # Skip binary files
-    if file "$file_path" 2>/dev/null | grep -q "binary\|executable\|data"; then
-        return
+    # Skip binary files (but allow text executables like scripts)
+    local file_type=$(file -b "$file_path" 2>/dev/null)
+    if echo "$file_type" | grep -qi "binary\|data\|image\|audio\|video\|archive\|compressed"; then
+        if ! echo "$file_type" | grep -qi "text"; then
+            return
+        fi
     fi
     
     # Extract content
