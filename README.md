@@ -261,13 +261,16 @@ python ~/.opencode/extensions/vector_store.py query abc123 "what patterns does t
 
 ### Basic Context Prompt
 
-```
+> **Note**: These are prompt templates for AI agents, not shell commands to run directly.
+> Replace `PROJECT_ID` with your actual project ID (use `ctx list` to find it).
+
+```text
 You have access to a project context system with code and documentation.
 
-To get context, use these commands:
-- `ctx get-full <project_id>` - Get complete context (code + rules + docs)
-- `ctx get <project_id> "query"` - Search for specific patterns
-- `ctx get-docs <project_id> rule` - Get project rules only
+To get context, run these shell commands:
+  ctx get-full PROJECT_ID           # Get complete context (code + rules + docs)
+  ctx get PROJECT_ID 'query'        # Search for specific patterns  
+  ctx get-docs PROJECT_ID rule      # Get project rules only
 
 Always check the rules before making changes. The context includes:
 - Project-specific coding rules and standards
@@ -280,17 +283,17 @@ Verify against actual files as context may be summarized.
 
 ### System Prompt with Injected Rules
 
-```
+```text
 You are an AI coding assistant for this project. Follow these guidelines:
 
 ## Project Rules
-{output of: ctx get-docs <project_id> rule}
+{output of: ctx get-docs PROJECT_ID rule}
 
 ## Architecture Overview  
-{output of: ctx get-docs <project_id> doc}
+{output of: ctx get-docs PROJECT_ID doc}
 
 ## Code Context
-{output of: ctx get <project_id>}
+{output of: ctx get PROJECT_ID}
 
 When making changes:
 1. Always follow the project rules above
@@ -300,22 +303,22 @@ When making changes:
 
 ### Interactive Agent with Semantic Search
 
-```
+```text
 You have access to a context management system. Available commands:
 
 Keyword Search (fast, exact matches):
-- ctx get PROJECT_ID "query"      # Search code
-- ctx get-docs PROJECT_ID rule    # Get rules
-- ctx get-full PROJECT_ID         # Everything
+  ctx get PROJECT_ID 'query'        # Search code
+  ctx get-docs PROJECT_ID rule      # Get rules
+  ctx get-full PROJECT_ID           # Everything
 
 Semantic Search (meaning-based, requires ChromaDB):
-- python ~/.opencode/extensions/vector_store.py search PROJECT_ID "query"
-- python ~/.opencode/extensions/vector_store.py query PROJECT_ID "question"
+  python ~/.opencode/extensions/vector_store.py search PROJECT_ID 'query'
+  python ~/.opencode/extensions/vector_store.py query PROJECT_ID 'question'
 
 Use keyword search for specific names/patterns.
-Use semantic search for conceptual questions like "how does X work?"
+Use semantic search for conceptual questions like 'how does X work?'
 
-Current project ID: {project_id}
+Current project ID: PROJECT_ID
 ```
 
 ## Configuration

@@ -17,12 +17,13 @@ show_help() {
     echo "Run opencode with automatic project context injection."
     echo ""
     echo "Options:"
-    echo "  -m, --mode MODE    Context mode: full, rules, code, docs (default: full)"
-    echo "  -i, --interactive  Start interactive TUI instead of run mode"
-    echo "  -q, --quiet        Don't show context summary"
-    echo "  -h, --help         Show this help"
+    echo "  -c, --context MODE   Context mode: full, rules, code, docs (default: full)"
+    echo "  -m, --model MODEL    Model to use (e.g., anthropic/claude-sonnet-4-20250514)"
+    echo "  -i, --interactive    Start interactive TUI instead of run mode"
+    echo "  -q, --quiet          Don't show context summary"
+    echo "  -h, --help           Show this help"
     echo ""
-    echo "Modes:"
+    echo "Context Modes:"
     echo "  full   - Inject rules + docs + code context (default)"
     echo "  rules  - Inject only project rules"
     echo "  code   - Inject only code context"
@@ -30,21 +31,27 @@ show_help() {
     echo ""
     echo "Examples:"
     echo "  ocx abc123 'fix the login bug'"
-    echo "  ocx -m rules abc123 'review this code'"
+    echo "  ocx -c rules abc123 'review this code'"
+    echo "  ocx -m anthropic/claude-sonnet-4-20250514 abc123 'fix bug'"
     echo "  ocx -i abc123                          # Interactive mode"
     echo ""
     echo "Use 'ctx list' to see available project IDs."
 }
 
 # Parse arguments
-MODE="full"
+CONTEXT_MODE="full"
+MODEL=""
 INTERACTIVE=false
 QUIET=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -m|--mode)
-            MODE="$2"
+        -c|--context)
+            CONTEXT_MODE="$2"
+            shift 2
+            ;;
+        -m|--model)
+            MODEL="$2"
             shift 2
             ;;
         -i|--interactive)
@@ -97,11 +104,12 @@ if [[ ! -f "$DISPATCHER" ]]; then
 fi
 
 # Source in zsh subshell to get functions
+# Suppress stderr to avoid jq parse errors from corrupted index files causing set -e to exit
 get_context_data() {
     zsh -c "
         source '$DISPATCHER'
         $1
-    " 2>/dev/null
+    " 2>/dev/null || true
 }
 
 # Verify project exists
@@ -120,6 +128,14 @@ PROJECT_PATH=$(jq -r '.path' "$PROJECT_DIR/config.json" 2>/dev/null || echo "Unk
 CONTEXT_FILE="/tmp/opencode_context_$$.md"
 
 {
+    echo "# 📚 PROJECT CONTEXT"
+    echo ""
+    echo "Context Mode: $CONTEXT_MODE"
+    echo "Project: $PROJECT_NAME (ID: $PROJECT_ID)"
+    echo "Path: $PROJECT_PATH"
+    echo ""
+    echo "---"
+    echo ""
     echo "# Project Context: $PROJECT_NAME"
     echo ""
     echo "Project Path: $PROJECT_PATH"
@@ -127,7 +143,7 @@ CONTEXT_FILE="/tmp/opencode_context_$$.md"
     echo ""
     
     # Rules (for full, rules, docs modes)
-    if [[ "$MODE" == "full" || "$MODE" == "rules" || "$MODE" == "docs" ]]; then
+    if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "rules" || "$CONTEXT_MODE" == "docs" ]]; then
         RULES=$(get_context_data "get_docs '$PROJECT_ID' rule")
         if [[ -n "$RULES" ]]; then
             echo "## Project Rules"
@@ -140,7 +156,7 @@ CONTEXT_FILE="/tmp/opencode_context_$$.md"
     fi
     
     # Documentation (for full, docs modes)
-    if [[ "$MODE" == "full" || "$MODE" == "docs" ]]; then
+    if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "docs" ]]; then
         DOCS=$(get_context_data "get_docs '$PROJECT_ID' doc")
         if [[ -n "$DOCS" ]]; then
             echo "## Documentation"
@@ -160,7 +176,7 @@ CONTEXT_FILE="/tmp/opencode_context_$$.md"
     fi
     
     # Code context (for full, code modes)
-    if [[ "$MODE" == "full" || "$MODE" == "code" ]]; then
+    if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "code" ]]; then
         CODE=$(get_context_data "get_context '$PROJECT_ID' '' 15")
         if [[ -n "$CODE" ]]; then
             echo "## Code Context"
@@ -175,7 +191,7 @@ CONTEXT_FILE="/tmp/opencode_context_$$.md"
     fi
     
     # Notes (for full mode only)
-    if [[ "$MODE" == "full" ]]; then
+    if [[ "$CONTEXT_MODE" == "full" ]]; then
         NOTES=$(get_context_data "get_docs '$PROJECT_ID' note")
         if [[ -n "$NOTES" ]]; then
             echo "## Notes"
@@ -192,13 +208,18 @@ if [[ "$QUIET" == "false" ]]; then
     CONTEXT_SIZE=$(wc -c < "$CONTEXT_FILE")
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${GREEN}Project:${NC} $PROJECT_NAME"
-    echo -e "${GREEN}Mode:${NC} $MODE"
+    echo -e "${GREEN}Context:${NC} $CONTEXT_MODE"
+    [[ -n "$MODEL" ]] && echo -e "${GREEN}Model:${NC} $MODEL"
     echo -e "${GREEN}Context:${NC} $CONTEXT_SIZE bytes injected"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 fi
 
 # Run opencode
+# Build model flag if specified
+MODEL_FLAG=""
+[[ -n "$MODEL" ]] && MODEL_FLAG="--model $MODEL"
+
 if [[ "$INTERACTIVE" == "true" ]]; then
     # Interactive TUI mode - change to project directory
     cd "$PROJECT_PATH" 2>/dev/null || true
@@ -211,28 +232,22 @@ if [[ "$INTERACTIVE" == "true" ]]; then
     
     opencode "$PROJECT_PATH"
 else
-    # Run mode with message
-    FULL_MESSAGE=$(cat <<EOF
-$MESSAGE
-
----
-Context from project "$PROJECT_NAME" has been loaded. Use it to understand the codebase.
-The context includes: $(echo "$MODE" | sed 's/full/rules, documentation, code, and notes/; s/rules/project rules only/; s/code/code context only/; s/docs/rules and documentation/')
-EOF
-)
-    
-    # Use opencode run with context prepended to message
+    # Run mode with message - prepend context directly to message so AI sees it
     CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
     
-    FULL_PROMPT="$CONTEXT_CONTENT
+    # Add system instruction to prioritize the provided context
+    FULL_MESSAGE="SYSTEM INSTRUCTIONS:
+You are working on the '$PROJECT_NAME' project. The following project context has been provided for you. Study it carefully and use it to inform your responses. Do NOT ignore this context.
+
+$CONTEXT_CONTENT
 
 ---
 
-# User Request
+USER REQUEST:
 
 $MESSAGE"
     
-    opencode run "$FULL_PROMPT"
+    opencode run "$FULL_MESSAGE" $MODEL_FLAG
 fi
 
 # Cleanup
@@ -240,5 +255,5 @@ rm -f "$CONTEXT_FILE"
 
 # Save interaction to agent context if AGENT_NAME is set
 if [[ -n "$AGENT_NAME" ]]; then
-    get_context_data "save_agent_context '$AGENT_NAME' 'Ran: $MESSAGE with context from $PROJECT_ID ($MODE mode)'"
+    get_context_data "save_agent_context '$AGENT_NAME' 'Ran: $MESSAGE with context from $PROJECT_ID ($CONTEXT_MODE mode)'"
 fi
