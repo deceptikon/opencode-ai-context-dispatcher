@@ -574,6 +574,170 @@ cleanup_old_context() {
 }
 
 # --------------------------------------------------------
+# Handler 7: Manual Docs/Notes Management
+# --------------------------------------------------------
+DOCS_DIR="$CONTEXT_ROOT/docs"
+mkdir -p "$DOCS_DIR"
+
+# Add a document/note to project context
+add_doc() {
+    local project_id="$1"
+    local doc_type="$2"  # rule, doc, note, prompt
+    local content="$3"
+    local title="${4:-untitled}"
+    
+    if [[ -z "$project_id" ]] || [[ -z "$doc_type" ]] || [[ -z "$content" ]]; then
+        echo "Usage: ctx add-doc <project_id> <type> <content> [title]"
+        echo "Types: rule, doc, note, prompt"
+        return 1
+    fi
+    
+    local project_docs="$DOCS_DIR/$project_id"
+    mkdir -p "$project_docs"
+    
+    local doc_file="$project_docs/docs.jsonl"
+    local doc_id=$(generate_uuid)
+    
+    local entry=$($JQ_CMD -n \
+        --arg id "$doc_id" \
+        --arg type "$doc_type" \
+        --arg title "$title" \
+        --arg content "$content" \
+        --arg timestamp "$(date -Iseconds)" \
+        '{id: $id, type: $type, title: $title, content: $content, timestamp: $timestamp}')
+    
+    echo "$entry" >> "$doc_file"
+    log "Added $doc_type: $title ($doc_id)"
+    echo "$doc_id"
+}
+
+# Add document from file
+add_doc_file() {
+    local project_id="$1"
+    local doc_type="$2"
+    local file_path="$3"
+    local title="${4:-$($BASENAME_CMD "$file_path")}"
+    
+    if [[ ! -f "$file_path" ]]; then
+        echo "Error: File not found: $file_path"
+        return 1
+    fi
+    
+    local content=$(cat "$file_path")
+    add_doc "$project_id" "$doc_type" "$content" "$title"
+}
+
+# List documents for a project
+list_docs() {
+    local project_id="$1"
+    local doc_type="$2"  # optional filter
+    
+    local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
+    
+    if [[ ! -f "$doc_file" ]]; then
+        echo "No documents found for project $project_id"
+        return
+    fi
+    
+    echo "Documents for project $project_id:"
+    if [[ -n "$doc_type" ]]; then
+        $JQ_CMD -r "select(.type == \"$doc_type\") | \"  [\(.type)] \(.title) (\(.id))\"" "$doc_file"
+    else
+        $JQ_CMD -r '"  [\(.type)] \(.title) (\(.id))"' "$doc_file"
+    fi
+}
+
+# Get documents content
+get_docs() {
+    local project_id="$1"
+    local doc_type="$2"  # optional filter
+    
+    local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
+    
+    if [[ ! -f "$doc_file" ]]; then
+        return
+    fi
+    
+    if [[ -n "$doc_type" ]]; then
+        $JQ_CMD -r "select(.type == \"$doc_type\") | \"## \(.title)\n\(.content)\n\"" "$doc_file"
+    else
+        $JQ_CMD -r '"## [\(.type)] \(.title)\n\(.content)\n"' "$doc_file"
+    fi
+}
+
+# Remove a document
+remove_doc() {
+    local project_id="$1"
+    local doc_id="$2"
+    
+    local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
+    
+    if [[ ! -f "$doc_file" ]]; then
+        echo "No documents found"
+        return 1
+    fi
+    
+    grep -v "\"id\":\"$doc_id\"" "$doc_file" > "${doc_file}.tmp"
+    mv "${doc_file}.tmp" "$doc_file"
+    log "Removed document: $doc_id"
+}
+
+# Edit a document (opens in $EDITOR)
+edit_doc() {
+    local project_id="$1"
+    local doc_id="$2"
+    
+    local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
+    local tmp_file="/tmp/ctx_edit_$$.md"
+    
+    # Extract content
+    $JQ_CMD -r "select(.id == \"$doc_id\") | .content" "$doc_file" > "$tmp_file"
+    
+    if [[ ! -s "$tmp_file" ]]; then
+        echo "Document not found: $doc_id"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    
+    # Open in editor
+    ${EDITOR:-vim} "$tmp_file"
+    
+    # Update content
+    local new_content=$(cat "$tmp_file")
+    local updated=$($JQ_CMD -r "select(.id == \"$doc_id\")" "$doc_file" | \
+        $JQ_CMD --arg content "$new_content" '.content = $content')
+    
+    # Replace in file
+    grep -v "\"id\":\"$doc_id\"" "$doc_file" > "${doc_file}.tmp"
+    echo "$updated" >> "${doc_file}.tmp"
+    mv "${doc_file}.tmp" "$doc_file"
+    
+    rm -f "$tmp_file"
+    log "Updated document: $doc_id"
+}
+
+# Get full context (code + docs) for AI
+get_full_context() {
+    local project_id="$1"
+    local query="$2"
+    
+    echo "=== PROJECT RULES ==="
+    get_docs "$project_id" "rule"
+    
+    echo "=== PROJECT DOCS ==="
+    get_docs "$project_id" "doc"
+    
+    echo "=== CUSTOM PROMPTS ==="
+    get_docs "$project_id" "prompt"
+    
+    echo "=== CODE CONTEXT ==="
+    get_context "$project_id" "$query"
+    
+    echo "=== NOTES ==="
+    get_docs "$project_id" "note"
+}
+
+# --------------------------------------------------------
 # Main Dispatcher Function
 # --------------------------------------------------------
 context() {
@@ -590,11 +754,32 @@ context() {
         get)
             get_context "$2" "$3" "$4"
             ;;
+        get-full)
+            get_full_context "$2" "$3"
+            ;;
         save-agent)
             save_agent_context "$2" "$3" "$4"
             ;;
         search-agent)
             search_agent_context "$2" "$3"
+            ;;
+        add-doc)
+            add_doc "$2" "$3" "$4" "$5"
+            ;;
+        add-file)
+            add_doc_file "$2" "$3" "$4" "$5"
+            ;;
+        list-docs)
+            list_docs "$2" "$3"
+            ;;
+        get-docs)
+            get_docs "$2" "$3"
+            ;;
+        edit-doc)
+            edit_doc "$2" "$3"
+            ;;
+        rm-doc)
+            remove_doc "$2" "$3"
             ;;
         list)
             list_projects
@@ -606,15 +791,32 @@ context() {
             cleanup_old_context "$2"
             ;;
         help|*)
-            echo "📚 Context Dispatcher Commands:"
+            echo "Context Dispatcher Commands:"
+            echo ""
+            echo "Project Management:"
             echo "  init <path> [name]       Initialize context for a project"
             echo "  update <project_id>      Incremental update from git"
             echo "  reindex <project_id>     Full reindex of project"
-            echo "  get <project_id> [query] Get context (optional search)"
-            echo "  save-agent <name> <text> Save agent-specific context"
-            echo "  search-agent <name> [q]  Search agent context"
             echo "  list                     List all managed projects"
             echo "  stats <project_id>       Show project statistics"
+            echo ""
+            echo "Context Retrieval:"
+            echo "  get <project_id> [query] Get code context (optional search)"
+            echo "  get-full <project_id>    Get full context (code + docs + rules)"
+            echo ""
+            echo "Documentation & Rules:"
+            echo "  add-doc <id> <type> <text> [title]  Add doc (types: rule/doc/note/prompt)"
+            echo "  add-file <id> <type> <file> [title] Add doc from file"
+            echo "  list-docs <id> [type]               List project documents"
+            echo "  get-docs <id> [type]                Get document contents"
+            echo "  edit-doc <id> <doc_id>              Edit document in \$EDITOR"
+            echo "  rm-doc <id> <doc_id>                Remove a document"
+            echo ""
+            echo "Agent Context:"
+            echo "  save-agent <name> <text> Save agent-specific context"
+            echo "  search-agent <name> [q]  Search agent context"
+            echo ""
+            echo "Maintenance:"
             echo "  cleanup [days]           Clean old context (default: 30)"
             ;;
     esac

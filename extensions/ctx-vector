@@ -1,0 +1,19 @@
+#!/bin/bash
+# Shell wrapper for vector store extension
+# Usage: ctx-vector <command> <project_id> [args...]
+
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+PYTHON_SCRIPT="$SCRIPT_DIR/vector_store.py"
+
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+    echo "Error: vector_store.py not found"
+    exit 1
+fi
+
+# Check for Python
+if ! command -v python3 &> /dev/null; then
+    echo "Error: python3 not found"
+    exit 1
+fi
+
+exec python3 "$PYTHON_SCRIPT" "$@"
