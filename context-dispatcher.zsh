@@ -288,9 +288,17 @@ reindex_context() {
         find_cmd="$find_cmd -not -path \"*/$pattern/*\""
     done
     
+    # Initialize index file
+    local index_file="$project_dir/index.json"
+    echo '{"files": {}, "chunks": [], "stats": {}}' > "$index_file"
+    
     # Execute find and process files
     local total_files=0
-    eval "$find_cmd" | while read file; do
+    local file_list="/tmp/reindex_files_$$.txt"
+    eval "$find_cmd" > "$file_list" 2>/dev/null
+    
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
         local rel_path="${file#$project_path/}"
         index_single_file "$project_id" "$file" "$rel_path"
         total_files=$((total_files + 1))
@@ -299,7 +307,8 @@ reindex_context() {
         if [[ $((total_files % 50)) -eq 0 ]]; then
             log "Processed $total_files files..."
         fi
-    done
+    done < "$file_list"
+    rm -f "$file_list"
     
     # Update timestamp
     $JQ_CMD --arg timestamp "$(date -Iseconds)" ".last_indexed = \$timestamp" \
@@ -324,6 +333,11 @@ index_single_file() {
         echo '{"files": {}, "chunks": [], "stats": {}}' > "$index_file"
     fi
     
+    # Skip binary files
+    if file "$file_path" 2>/dev/null | grep -q "binary\|executable\|data"; then
+        return
+    fi
+    
     # Extract content
     local content=$(cat "$file_path" 2>/dev/null)
     if [[ -z "$content" ]]; then
@@ -332,11 +346,11 @@ index_single_file() {
     
     # Extract functions/methods/classes
     local extracted=""
-    if [[ "$file_path" =~ .(js|jsx|ts|tsx)$ ]]; then
+    if [[ "$file_path" == *.js || "$file_path" == *.jsx || "$file_path" == *.ts || "$file_path" == *.tsx ]]; then
         extracted=$(extract_js_structures "$content")
-    elif [[ "$file_path" =~ .py$ ]]; then
+    elif [[ "$file_path" == *.py ]]; then
         extracted=$(extract_py_structures "$content")
-    elif [[ "$file_path" =~ .rs$ ]]; then
+    elif [[ "$file_path" == *.rs ]]; then
         extracted=$(extract_rust_structures "$content")
     else
         extracted="$content"
@@ -372,36 +386,40 @@ index_single_file() {
     
     # Add chunks
     local chunk_index=0
+    local chunk_tmp="/tmp/chunk_content_$$.txt"
     for chunk_content in "${chunks[@]}"; do
         local chunk_id="${rel_path}#${chunk_index}"
-        jq --arg id "$chunk_id" \
+        # Write chunk to temp file to avoid argument length limits
+        printf '%s' "$chunk_content" > "$chunk_tmp"
+        $JQ_CMD --arg id "$chunk_id" \
            --arg path "$rel_path" \
-           --arg content "$chunk_content" \
+           --rawfile content "$chunk_tmp" \
            '.files[$path].chunks += [$id] | .chunks += [{"id": $id, "path": $path, "content": $content}]' \
-           "$temp_file" > "${temp_file}2"
+           "$temp_file" > "${temp_file}2" 2>/dev/null
         mv "${temp_file}2" "$temp_file"
         chunk_index=$((chunk_index + 1))
     done
+    rm -f "$chunk_tmp"
     
     mv "$temp_file" "$index_file"
 }
 
 # Extract JavaScript/TypeScript structures
 extract_js_structures() {
-    echo "$1" | grep -E "(function|class|const|let|var|export|import|interface|type).*\{?$" \
-        -A 8 | head -30
+    LC_ALL=C grep -a -E "(function|class|const|let|var|export|import|interface|type).*[{]?$" \
+        -A 8 2>/dev/null <<< "$1" | head -30
 }
 
 # Extract Python structures
 extract_py_structures() {
-    echo "$1" | grep -E "(def|class|import|from).*:$" \
-        -A 6 | head -30
+    LC_ALL=C grep -a -E "(def|class|import|from).*:$" \
+        -A 6 2>/dev/null <<< "$1" | head -30
 }
 
 # Extract Rust structures
 extract_rust_structures() {
-    echo "$1" | grep -E "(fn|struct|enum|impl|mod|pub).*\{?$" \
-        -A 6 | head -30
+    LC_ALL=C grep -a -E "(fn|struct|enum|impl|mod|pub).*[{]?$" \
+        -A 6 2>/dev/null <<< "$1" | head -30
 }
 
 # --------------------------------------------------------
@@ -534,15 +552,19 @@ project_stats() {
     
     local index_file="$project_dir/index.json"
     
-    if [[ ! -f "$index_file" ]]; then
-        echo "No index found for project"
+    if [[ ! -f "$index_file" ]] || [[ ! -s "$index_file" ]]; then
+        echo "No index found for project. Run: ctx reindex $project_id"
         return
     fi
     
+    local files_count=$($JQ_CMD ".files | length" "$index_file" 2>/dev/null)
+    local chunks_count=$($JQ_CMD ".chunks | length" "$index_file" 2>/dev/null)
+    local total_size=$($JQ_CMD "[.chunks[].content | length] | add // 0" "$index_file" 2>/dev/null)
+    
     echo "Project Statistics:"
-    echo "  Files: $($JQ_CMD ".files | length" "$index_file")"
-    echo "  Chunks: $($JQ_CMD ".chunks | length" "$index_file")"
-    echo "  Total size: $($JQ_CMD "[.chunks[].content | length] | add" "$index_file") chars"
+    echo "  Files: ${files_count:-0}"
+    echo "  Chunks: ${chunks_count:-0}"
+    echo "  Total size: ${total_size:-0} chars"
 }
 
 cleanup_old_context() {
