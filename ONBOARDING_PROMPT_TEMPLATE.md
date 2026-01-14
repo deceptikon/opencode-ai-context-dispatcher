@@ -20,7 +20,14 @@ CRITICAL ONBOARDING SESSION - Learn to Work with This Project
 Your task is to thoroughly explore and document how to work with this project.
 You will save everything you learn so future agents can work effectively.
 
-IMPORTANT: Use 'run' bash tool to explore. Actually test things, don't just read.
+⚠️  IMPORTANT NOTES:
+- This template works for ANY project type (Python, Node, Go, Rust, etc.)
+- Only document what YOU ACTUALLY FIND - ignore sections for tools not in this project
+- If a tool is not available, that's OK - just skip it and move on
+- Document the ACTUAL commands you discover, not the ones in examples
+- Be flexible: Every project is different, document what's unique about THIS one
+
+Use 'run' bash tool to explore. Actually test things, don't just read.
 
 PHASE 1: EXPLORATION (30 min)
 ===============================
