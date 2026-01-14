@@ -19,7 +19,8 @@ show_help() {
     echo "Options:"
     echo "  -c, --context MODE   Context mode: full, rules, code, docs (default: full)"
     echo "  -m, --model MODEL    Model to use (e.g., anthropic/claude-sonnet-4-20250514)"
-    echo "  -i, --interactive    Start interactive TUI instead of run mode"
+    echo "  -a, --agent AGENT    Agent to use (enables tool access)"
+    echo "  -i, --interactive    Start interactive TUI instead of run mode (has tools)"
     echo "  -q, --quiet          Don't show context summary"
     echo "  -h, --help           Show this help"
     echo ""
@@ -30,17 +31,19 @@ show_help() {
     echo "  docs   - Inject rules + documentation (no code)"
     echo ""
     echo "Examples:"
-    echo "  ocx abc123 'fix the login bug'"
-    echo "  ocx -c rules abc123 'review this code'"
-    echo "  ocx -m anthropic/claude-sonnet-4-20250514 abc123 'fix bug'"
-    echo "  ocx -i abc123                          # Interactive mode"
+    echo "  ocx abc123 'fix the login bug'                    # Interactive TUI with tools"
+    echo "  ocx -c rules abc123 'review this code'            # Rules mode, interactive"
+    echo "  ocx -m anthropic/claude-sonnet-4-20250514 abc123  # Use specific model"
+    echo "  ocx -a my-agent abc123 'task'                    # Use specific agent with tools"
     echo ""
     echo "Use 'ctx list' to see available project IDs."
+    echo "Use 'opencode agent list' to see available agents."
 }
 
 # Parse arguments
 CONTEXT_MODE="full"
 MODEL=""
+AGENT=""
 INTERACTIVE=false
 QUIET=false
 
@@ -52,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -m|--model)
             MODEL="$2"
+            shift 2
+            ;;
+        -a|--agent)
+            AGENT="$2"
             shift 2
             ;;
         -i|--interactive)
@@ -88,11 +95,10 @@ if [[ -z "$PROJECT_ID" ]]; then
     exit 1
 fi
 
-if [[ -z "$MESSAGE" ]] && [[ "$INTERACTIVE" == "false" ]]; then
-    echo -e "${RED}Error: Message required (or use -i for interactive mode)${NC}"
-    echo ""
-    show_help
-    exit 1
+if [[ -z "$MESSAGE" ]]; then
+    # If no message and not explicitly non-interactive, default to interactive mode
+    # (which provides tool access)
+    INTERACTIVE=true
 fi
 
 # Load context dispatcher
@@ -210,33 +216,42 @@ if [[ "$QUIET" == "false" ]]; then
     echo -e "${GREEN}Project:${NC} $PROJECT_NAME"
     echo -e "${GREEN}Context:${NC} $CONTEXT_MODE"
     [[ -n "$MODEL" ]] && echo -e "${GREEN}Model:${NC} $MODEL"
+    [[ -n "$AGENT" ]] && echo -e "${GREEN}Agent:${NC} $AGENT"
     echo -e "${GREEN}Context:${NC} $CONTEXT_SIZE bytes injected"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 fi
 
 # Run opencode
-# Build model flag if specified
+# Build flags
 MODEL_FLAG=""
 [[ -n "$MODEL" ]] && MODEL_FLAG="--model $MODEL"
+
+AGENT_FLAG=""
+[[ -n "$AGENT" ]] && AGENT_FLAG="--agent $AGENT"
 
 if [[ "$INTERACTIVE" == "true" ]]; then
     # Interactive TUI mode - change to project directory
     cd "$PROJECT_PATH" 2>/dev/null || true
     
-    # For interactive, we can't easily inject context
-    # But we can set it as initial message
-    echo -e "${YELLOW}Starting interactive mode in: $PROJECT_PATH${NC}"
-    echo -e "${YELLOW}Tip: The context file is at: $CONTEXT_FILE${NC}"
-    echo ""
+    # For interactive TUI, context is embedded in the environment
+    # The user can access the context file if needed
+    if [[ "$QUIET" == "false" ]]; then
+        echo -e "${YELLOW}Starting interactive mode in: $PROJECT_PATH${NC}"
+        echo -e "${YELLOW}Context available in: $CONTEXT_FILE${NC}"
+        echo ""
+    fi
     
-    opencode "$PROJECT_PATH"
+    # Run opencode with optional model and agent flags
+    opencode "$PROJECT_PATH" $MODEL_FLAG $AGENT_FLAG
 else
-    # Run mode with message - prepend context directly to message so AI sees it
+    # Run mode with message - for tool access, use agent if specified
+    # Otherwise prepend context to message
     CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
     
-    # Add system instruction to prioritize the provided context
-    FULL_MESSAGE="SYSTEM INSTRUCTIONS:
+    if [[ -n "$AGENT" ]]; then
+        # When using an agent, prepend context and use agent flag
+        FULL_MESSAGE="SYSTEM INSTRUCTIONS:
 You are working on the '$PROJECT_NAME' project. The following project context has been provided for you. Study it carefully and use it to inform your responses. Do NOT ignore this context.
 
 $CONTEXT_CONTENT
@@ -246,8 +261,23 @@ $CONTEXT_CONTENT
 USER REQUEST:
 
 $MESSAGE"
-    
-    opencode run "$FULL_MESSAGE" $MODEL_FLAG
+        
+        opencode run "$FULL_MESSAGE" $MODEL_FLAG $AGENT_FLAG
+    else
+        # Without agent, fallback to standard context prepending
+        FULL_MESSAGE="SYSTEM INSTRUCTIONS:
+You are working on the '$PROJECT_NAME' project. The following project context has been provided for you. Study it carefully and use it to inform your responses. Do NOT ignore this context.
+
+$CONTEXT_CONTENT
+
+---
+
+USER REQUEST:
+
+$MESSAGE"
+        
+        opencode run "$FULL_MESSAGE" $MODEL_FLAG
+    fi
 fi
 
 # Cleanup

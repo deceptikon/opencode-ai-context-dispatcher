@@ -53,21 +53,34 @@ ocx <project_id> "fix the authentication bug"
 The `ocx` command wraps opencode and automatically injects your project context:
 
 ```bash
-# Basic usage - injects full context (rules + docs + code)
-ocx <project_id> "your prompt here"
+# Interactive mode (default if no message) - FULL TOOL ACCESS
+ocx <project_id>
 
-# Different context modes
-ocx -m full <project_id> "prompt"    # Full context (default)
-ocx -m rules <project_id> "prompt"   # Only project rules
-ocx -m code <project_id> "prompt"    # Only code context  
-ocx -m docs <project_id> "prompt"    # Rules + documentation
-
-# Interactive TUI mode
-ocx -i <project_id>
+# With context mode - still interactive with full tools
+ocx -c full <project_id>
+ocx -c rules <project_id>
+ocx -c code <project_id>  
+ocx -c docs <project_id>
 
 # Quiet mode (no context summary)
-ocx -q <project_id> "prompt"
+ocx -q <project_id>
+
+# Specify model
+ocx -m opencode/big-pickle <project_id>
+
+# Use agent with tools
+ocx -a my-agent <project_id> "your task"
 ```
+
+### Important: Tool Access
+
+**OpenCode agents have tool access by default in INTERACTIVE mode only.**
+
+- ✅ `ocx <id>` → Interactive mode with tools
+- ❌ `ocx <id> "message"` → Headless mode without tools
+- ✅ `ocx -a <agent> <id> "message"` → Agent mode (if agent has tools)
+
+For tasks requiring tool usage (running tests, executing commands, editing files), use interactive mode. See [CTX_TOOLS_GUIDE.md](./CTX_TOOLS_GUIDE.md) for details.
 
 ### What Gets Injected
 
