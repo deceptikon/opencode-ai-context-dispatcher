@@ -97,33 +97,47 @@ else
     echo "  ⚠️  ocx-onboard not in PATH (reload shell or check PATH)"
 fi
 
+# Reload shell environment for current session
+echo ""
+echo "⚡ Reloading shell environment..."
+if [[ -f "$HOME/.zshrc" ]]; then
+    source "$HOME/.zshrc" 2>/dev/null || true
+elif [[ -f "$HOME/.bashrc" ]]; then
+    source "$HOME/.bashrc" 2>/dev/null || true
+fi
+
+# Re-verify after reload
+echo ""
+echo "✅ Final verification after reload..."
+if command -v ctx &> /dev/null; then
+    echo "  ✓ ctx ready"
+else
+    echo "  ⚠️  ctx still not found - try: source ~/.bashrc"
+fi
+
+if command -v ocx &> /dev/null; then
+    echo "  ✓ ocx ready"
+else
+    echo "  ⚠️  ocx still not found - try: source ~/.bashrc"
+fi
+
 # Summary
 echo ""
 echo "╔════════════════════════════════════════════════════════════╗"
-echo "║          ✅ Installation Complete!                         ║"
+echo "║          ✅ Installation Complete & Ready!                 ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 echo "📍 Install location: $OPENCODE_HOME"
 echo ""
-echo "📚 Quick start:"
-echo "   1. Reload your shell:  source ~/.bashrc  (or ~/.zshrc)"
-echo "   2. List projects:      ctx list"
-echo "   3. Run onboarding:     ocx-onboard <project-id>"
+echo "🚀 You can now use:"
+echo "   ctx list                    # List all projects"
+echo "   ocx-onboard <project-id>    # Run onboarding for a project"
+echo "   ocx <project-id>            # Start interactive mode"
 echo ""
 echo "📖 Documentation:"
 echo "   - README.md                          - Main guide"
 echo "   - ONBOARDING_PROMPT_TEMPLATE.md     - Generic onboarding prompt"
 echo "   - POC_TEST_GUIDE.md                 - How to test the system"
 echo ""
-echo "🔧 Directory structure:"
-echo "   ~/.opencode/"
-echo "   ├── bin/                (executables)"
-echo "   ├── templates/          (prompt templates)"
-echo "   ├── context/            (project databases)"
-echo "   │  ├── projects/       (project configs)"
-echo "   │  ├── docs/           (project context JSONL)"
-echo "   │  └── ..."
-echo "   └── context-dispatcher.zsh (symlink to repo)"
-echo ""
-echo "All set! You can now use ctx and ocx commands from anywhere."
+echo "🔧 Everything is in: ~/.opencode/"
 echo ""
