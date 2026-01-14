@@ -11,11 +11,17 @@ echo ""
 echo "⚠️  This will remove the installation but KEEP your context data in:"
 echo "   $OPENCODE_HOME/context/"
 echo ""
-read -p "Continue? (y/N) " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Cancelled."
-    exit 1
+
+# Auto-confirm if --force or -f flag passed, otherwise ask
+if [[ "$1" != "-f" && "$1" != "--force" ]]; then
+    read -p "Continue? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled."
+        exit 1
+    fi
+else
+    echo "(Force mode - skipping confirmation)"
 fi
 
 echo ""
@@ -55,10 +61,20 @@ if [[ -d "$OPENCODE_HOME/extensions" ]]; then
 fi
 
 echo ""
+echo "⚡ Reloading shell environment..."
+if [[ -f "$HOME/.zshrc" ]]; then
+    source "$HOME/.zshrc" 2>/dev/null || true
+elif [[ -f "$HOME/.bashrc" ]]; then
+    source "$HOME/.bashrc" 2>/dev/null || true
+fi
+
+echo ""
 echo "✅ Uninstall complete!"
 echo ""
 echo "Your context data is still at:"
 echo "   $OPENCODE_HOME/context/"
+echo ""
+echo "Commands removed from PATH. Ready for fresh install!"
 echo ""
 echo "To fully remove (DELETE CONTEXT DATA):"
 echo "   rm -rf $OPENCODE_HOME"
