@@ -1,0 +1,276 @@
+#!/bin/bash
+# Wrapper for opencode with automatic context injection
+# Injects project rules, documentation, and code context before your prompt
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+show_help() {
+    echo "Usage: ocx [OPTIONS] <project_id> [message...]"
+    echo ""
+    echo "Run opencode with automatic project context injection."
+    echo ""
+    echo "Options:"
+    echo "  -c, --context MODE   Context mode: full, rules, code, docs (default: full)"
+    echo "  -m, --model MODEL    Model to use (default: ollama/mistral for free testing)"
+    echo "  -a, --agent AGENT    Agent to use (enables tool access)"
+    echo "  -i, --interactive    Start interactive TUI instead of run mode (has tools)"
+    echo "  -q, --quiet          Don't show context summary"
+    echo "  -h, --help           Show this help"
+    echo ""
+    echo "Context Modes:"
+    echo "  full   - Inject rules + docs + code context (default)"
+    echo "  rules  - Inject only project rules"
+    echo "  code   - Inject only code context"
+    echo "  docs   - Inject rules + documentation (no code)"
+    echo ""
+    echo "Examples:"
+    echo "  ocx abc123 'fix the login bug'                    # Interactive TUI with tools"
+    echo "  ocx -c rules abc123 'review this code'            # Rules mode, interactive"
+    echo "  ocx -m anthropic/claude-sonnet-4-20250514 abc123  # Use specific model"
+    echo "  ocx -a my-agent abc123 'task'                    # Use specific agent with tools"
+    echo ""
+    echo "Use 'ctx list' to see available project IDs."
+    echo "Use 'opencode agent list' to see available agents."
+}
+
+# Parse arguments
+CONTEXT_MODE="full"
+MODEL="opencode/big-pickle"  # Default model for testing
+AGENT=""
+INTERACTIVE=false
+QUIET=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -c|--context)
+            CONTEXT_MODE="$2"
+            shift 2
+            ;;
+        -m|--model)
+            MODEL="$2"
+            shift 2
+            ;;
+        -a|--agent)
+            AGENT="$2"
+            shift 2
+            ;;
+        -i|--interactive)
+            INTERACTIVE=true
+            shift
+            ;;
+        -q|--quiet)
+            QUIET=true
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -*)
+            echo -e "${RED}Unknown option: $1${NC}"
+            show_help
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+PROJECT_ID="$1"
+shift 2>/dev/null || true
+MESSAGE="$*"
+
+if [[ -z "$PROJECT_ID" ]]; then
+    echo -e "${RED}Error: Project ID required${NC}"
+    echo ""
+    show_help
+    exit 1
+fi
+
+if [[ -z "$MESSAGE" ]]; then
+    # If no message, default to interactive mode (provides tool access)
+    INTERACTIVE=true
+else
+    # If message provided, ALSO use interactive mode (with --prompt flag)
+    # This gives the agent tool access while passing the message as a prompt
+    INTERACTIVE=true
+fi
+
+# Load context dispatcher
+DISPATCHER="$HOME/.opencode/context-dispatcher.zsh"
+if [[ ! -f "$DISPATCHER" ]]; then
+    echo -e "${RED}Error: Context dispatcher not found.${NC}"
+    echo "Please run install-context-dispatcher.sh first."
+    exit 1
+fi
+
+# Read context data directly from JSONL files (no zsh needed)
+# This is much faster and more reliable than sourcing zsh
+get_context_data() {
+    # This function is kept for compatibility but mostly unused now
+    # Context is injected directly in the prompt below
+    true
+}
+
+# Verify project exists
+PROJECT_DIR="$HOME/.opencode/context/projects/$PROJECT_ID"
+if [[ ! -d "$PROJECT_DIR" ]]; then
+    echo -e "${RED}Error: Project '$PROJECT_ID' not found.${NC}"
+    echo "Use 'ctx list' to see available projects."
+    exit 1
+fi
+
+# Get project info
+PROJECT_NAME=$(jq -r '.name' "$PROJECT_DIR/config.json" 2>/dev/null || echo "Unknown")
+PROJECT_PATH=$(jq -r '.path' "$PROJECT_DIR/config.json" 2>/dev/null || echo "Unknown")
+
+# Build context - use Python ctx tool to extract from JSONL
+CONTEXT_FILE="/tmp/opencode_context_$$.md"
+
+{
+    echo "# 📚 PROJECT CONTEXT: $PROJECT_NAME"
+    echo ""
+    echo "**Project ID**: $PROJECT_ID"
+    echo "**Path**: $PROJECT_PATH"
+    echo "**Mode**: $CONTEXT_MODE"
+    echo ""
+    echo "---"
+    echo ""
+    
+    # Load context from JSONL using grep (fast, no external commands)
+    DOCS_FILE="$HOME/.opencode/context/docs/$PROJECT_ID/docs.jsonl"
+    
+    if [[ -f "$DOCS_FILE" ]]; then
+        # Extract and display rules
+        if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "rules" || "$CONTEXT_MODE" == "docs" ]]; then
+            RULES_COUNT=$(grep '"type": "rule"' "$DOCS_FILE" 2>/dev/null | wc -l)
+            if [[ $RULES_COUNT -gt 0 ]]; then
+                echo "## Project Rules ($RULES_COUNT)"
+                echo ""
+                grep '"type": "rule"' "$DOCS_FILE" | jq -r '.title + ": " + .content' 2>/dev/null | head -10
+                echo ""
+            fi
+        fi
+        
+        # Extract and display docs
+        if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "docs" ]]; then
+            DOCS_COUNT=$(grep '"type": "doc"' "$DOCS_FILE" 2>/dev/null | wc -l)
+            if [[ $DOCS_COUNT -gt 0 ]]; then
+                echo "## Documentation ($DOCS_COUNT)"
+                echo ""
+                grep '"type": "doc"' "$DOCS_FILE" | jq -r '.title + ": " + .content' 2>/dev/null | head -10
+                echo ""
+            fi
+        fi
+        
+        # Extract and display notes
+        if [[ "$CONTEXT_MODE" == "full" ]]; then
+            NOTES_COUNT=$(grep '"type": "note"' "$DOCS_FILE" 2>/dev/null | wc -l)
+            if [[ $NOTES_COUNT -gt 0 ]]; then
+                echo "## Notes & Workflows ($NOTES_COUNT)"
+                echo ""
+                grep '"type": "note"' "$DOCS_FILE" | jq -r '.title + ": " + .content' 2>/dev/null | head -10
+                echo ""
+            fi
+        fi
+    fi
+    
+    echo "**Available tools**: ctx add-doc, ctx get-docs, ctx list-docs"
+    echo ""
+    
+} > "$CONTEXT_FILE"
+
+# Show summary unless quiet
+if [[ "$QUIET" == "false" ]]; then
+    CONTEXT_SIZE=$(wc -c < "$CONTEXT_FILE")
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}Project:${NC} $PROJECT_NAME"
+    echo -e "${GREEN}Context:${NC} $CONTEXT_MODE"
+    [[ -n "$MODEL" ]] && echo -e "${GREEN}Model:${NC} $MODEL"
+    [[ -n "$AGENT" ]] && echo -e "${GREEN}Agent:${NC} $AGENT"
+    echo -e "${GREEN}Context:${NC} $CONTEXT_SIZE bytes injected"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+fi
+
+# Run opencode
+# Build flags
+MODEL_FLAG=""
+[[ -n "$MODEL" ]] && MODEL_FLAG="--model $MODEL"
+
+AGENT_FLAG=""
+[[ -n "$AGENT" ]] && AGENT_FLAG="--agent $AGENT"
+
+if [[ "$INTERACTIVE" == "true" ]]; then
+    # Interactive TUI mode - change to project directory
+    cd "$PROJECT_PATH" 2>/dev/null || true
+    
+    # Show context details
+    if [[ "$QUIET" == "false" ]]; then
+        echo -e "${YELLOW}Starting interactive mode in: $PROJECT_PATH${NC}"
+        echo -e "${YELLOW}Context Mode: $CONTEXT_MODE${NC}"
+        if [[ -n "$MESSAGE" ]]; then
+            echo -e "${YELLOW}Initial prompt: $MESSAGE${NC}"
+        fi
+        echo ""
+    fi
+    
+    # Build prompt for TUI if message is provided
+    if [[ -n "$MESSAGE" ]]; then
+        CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
+        PROMPT_TEXT="$CONTEXT_CONTENT
+
+---
+
+$MESSAGE"
+        # Use --prompt flag to pass message to interactive TUI
+        opencode "$PROJECT_PATH" --prompt "$PROMPT_TEXT" $MODEL_FLAG $AGENT_FLAG
+    else
+        # Run opencode with optional model and agent flags
+        opencode "$PROJECT_PATH" $MODEL_FLAG $AGENT_FLAG
+    fi
+else
+    # Headless run mode with message
+    # This mode has limited tool access, warn user
+    if [[ "$QUIET" == "false" ]]; then
+        echo -e "${YELLOW}⚠ Running in headless mode (limited tool access)${NC}"
+        echo -e "${YELLOW}For better results with tool-dependent tasks, try interactive mode:${NC}"
+        echo -e "${YELLOW}  ocx $PROJECT_ID (without message to enter interactive mode)${NC}"
+        echo ""
+    fi
+    
+    CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
+    
+    FULL_MESSAGE="PROJECT CONTEXT FOR '$PROJECT_NAME':
+================================================================================
+
+$CONTEXT_CONTENT
+
+================================================================================
+USER REQUEST:
+================================================================================
+
+$MESSAGE"
+    
+    if [[ -n "$AGENT" ]]; then
+        opencode run "$FULL_MESSAGE" $MODEL_FLAG $AGENT_FLAG
+    else
+        opencode run "$FULL_MESSAGE" $MODEL_FLAG
+    fi
+fi
+
+# Cleanup
+rm -f "$CONTEXT_FILE"
+
+# Save interaction to agent context if AGENT_NAME is set
+if [[ -n "$AGENT_NAME" ]]; then
+    get_context_data "save_agent_context '$AGENT_NAME' 'Ran: $MESSAGE with context from $PROJECT_ID ($CONTEXT_MODE mode)'"
+fi

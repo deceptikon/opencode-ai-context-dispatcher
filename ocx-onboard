@@ -18,9 +18,8 @@ fi
 
 PROJECT_ID="$1"
 
-# Get the script directory to find template
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE="$SCRIPT_DIR/ONBOARDING_PROMPT_TEMPLATE.md"
+# Find template in ~/.opencode/templates/
+TEMPLATE="${HOME}/.opencode/templates/ONBOARDING_PROMPT_TEMPLATE.md"
 
 if [[ ! -f "$TEMPLATE" ]]; then
     echo "Error: Onboarding template not found at $TEMPLATE"
