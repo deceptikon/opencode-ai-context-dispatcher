@@ -1,14 +1,16 @@
 # Context Tools (ctx) & Agent Tool Access Guide
 
-## The Issue: "invalid Invalid Tool"
+## The Issue: "invalid Invalid Tool" or Missing ctx Tools
 
 When running `ocx` with a message that requests tool usage, the agent may show:
 ```
 |  invalid  Invalid Tool
 ```
 
-This occurs because `opencode run` doesn't grant tool access to the AI agent by default. Tool access is only available in:
-1. **Interactive TUI mode** (default, has full tool support)
+Or it may try to run commands like `pytest` directly instead of `uv run pytest`.
+
+This occurs because `opencode run` (headless mode) has **severely limited tool access**. Full tool access is only available in:
+1. **Interactive TUI mode** (recommended - has full tool support)
 2. **With an agent** (using `--agent` flag with proper configuration)
 
 ## How Tool Access Works in OpenCode
@@ -26,78 +28,95 @@ This occurs because `opencode run` doesn't grant tool access to the AI agent by 
 
 ## Solutions
 
-### Solution 1: Use Interactive Mode (Recommended)
+### Solution 1: Use Interactive Mode with Prompt (Recommended)
 
-Instead of providing a message, let the agent start in interactive TUI with tools:
+Pass your message as a prompt to the interactive TUI, which has full tool access:
 
 ```bash
-# This gives you a full interactive session with tools
-ocx 7e304c6738a8b942
+# This starts interactive mode and seeds it with your prompt
+# The context is available and agent has full tools
+ocx -c full 7e304c6738a8b942 "run unit tests and fix failures"
 
-# Or specify context mode
-ocx -c full 7e304c6738a8b942
+# Or without specifying context (defaults to full)
+ocx 7e304c6738a8b942 "run tests"
 ```
 
-In interactive mode, you can:
-- Execute code
-- Run commands
-- Use all available tools
-- Access the project context
+**This is the key fix!** When you provide a message to `ocx`, it now:
+1. ✅ Opens the interactive TUI (not headless mode)
+2. ✅ Passes your message as an initial prompt
+3. ✅ Injects context automatically
+4. ✅ Agent has FULL tool access
 
-### Solution 2: Use an Agent with Tool Configuration
+In interactive mode, the agent can:
+- Execute code and tests
+- Run arbitrary commands
+- Edit files
+- Use the `ctx` command to save working context
+- Access all tools natively
 
-First, create or use an agent that has tool access configured:
+### Solution 2: Interactive Mode Without Initial Prompt
+
+Start interactive mode and interact manually:
 
 ```bash
-# List available agents
-opencode agent list
+# Opens interactive TUI with context available
+ocx 7e304c6738a8b942
 
-# Run ocx with an agent
-ocx -a my-agent 7e304c6738a8b942 "Confirm access to ctx tools. Run unit tests..."
+# Then type your request in the interactive session
+# The agent can use all tools from there
 ```
 
-**Note**: The agent must be configured with tool access. Check your agent configuration.
+### Solution 3: Use with Custom Context Mode
 
-### Solution 3: Default Behavior Change
-
-The updated `ocx` script now **defaults to interactive mode** when no message is provided:
+Combine the prompt approach with specific context:
 
 ```bash
-# Before: Would error "Message required"
-# Now: Starts interactive TUI with tools
-ocx 7e304c6738a8b942
+# Run tests with only rules context
+ocx -c rules 7e304c6738a8b942 "run tests"
+
+# With only code context  
+ocx -c code 7e304c6738a8b942 "analyze the test failures"
+
+# Full context (default)
+ocx -c full 7e304c6738a8b942 "run all tests and fix failures"
 ```
 
 ## Testing Tool Access
 
-### Test 1: Verify Interactive Mode Has Tools
+### Test 1: Run Tests with Auto-Prompt
 
 ```bash
-ocx 7e304c6738a8b942
-# In the TUI, try running a command like: run ls
-# If tools work, you'll see the output
+ocx 7e304c6738a8b942 "run unit tests"
 ```
 
-### Test 2: Test with Context Modes
+Expected behavior:
+- Opens interactive TUI
+- Passes "run unit tests" as initial prompt
+- Agent can execute tests with full tool access
+- See test output in real-time
+
+### Test 2: Test with Different Context Modes
 
 ```bash
-# Full context + interactive tools
-ocx -c full 7e304c6738a8b942
+# Full context + interactive tools + prompt
+ocx -c full 7e304c6738a8b942 "run unit tests and fix failures"
 
-# Rules only + interactive tools
-ocx -c rules 7e304c6738a8b942
+# Rules only + interactive tools + prompt
+ocx -c rules 7e304c6738a8b942 "what are the project rules?"
 
 # Code + docs + interactive tools
-ocx -c docs 7e304c6738a8b942
+ocx -c docs 7e304c6738a8b942 "explain the architecture"
 ```
 
-### Test 3: Verify Context Is Injected
+### Test 3: Verify ctx Tools Are Available
 
-In interactive mode, check that the context was loaded:
+In the interactive TUI, agent can now use ctx:
 
 ```
-Enter prompt: "What are the project rules?"
-# Should reference rules from your ctx context
+# Agent can run and it will work:
+run ctx list
+run ctx add-doc <id> rule "new rule" "title"
+run ctx get-docs <id>
 ```
 
 ## Why Tool Access Differs by Mode
@@ -139,18 +158,33 @@ ocx -h
 
 ## Workflow Example: Unit Tests with Tools
 
+**The Recommended Way** (NEW):
+
 ```bash
-# 1. Start interactive mode with context
+# One command - everything you need!
+ocx -c full 7e304c6738a8b942 "run unit tests and fix failures"
+
+# What happens:
+# 1. Opens interactive TUI (has tool access)
+# 2. Injects full context (rules + code + docs)
+# 3. Passes "run unit tests and fix failures" as prompt
+# 4. Agent can execute:
+#    - Run tests: npm test, pytest, uv run pytest, etc.
+#    - Read files and understand failures
+#    - Edit files to fix issues
+#    - Save context with ctx add-doc
+# 5. All output visible in real-time
+```
+
+**Alternative** (Manual):
+
+```bash
+# Start interactive, then type commands manually
 ocx -c full 7e304c6738a8b942
 
-# 2. In the interactive TUI, you can now:
-# Type: "Run unit tests and fix failures"
-# The agent has access to:
-# - Execute commands (npm test, pytest, etc.)
-# - Read and edit files
-# - Use all tools for fixing issues
-
-# 3. Context from your project is available in the AI's knowledge
+# Then in the TUI:
+# - Type your request
+# - Agent runs with full tools
 ```
 
 ## Troubleshooting
@@ -169,24 +203,70 @@ ocx -c full 7e304c6738a8b942
 
 ## Recommended Patterns
 
-### For Development Tasks
+### Pattern 1: Test Execution with Auto-Fix
+
 ```bash
-# Start interactive session with full context
-ocx -c full <project_id>
-# Chat with context, use tools naturally
+# Run tests and let agent fix failures automatically
+ocx -c full <project_id> "run all tests and fix any failures"
+
+# What the agent will do:
+# 1. Execute tests (pytest, npm test, etc.)
+# 2. See which tests fail
+# 3. Read failing test files
+# 4. Fix the implementation
+# 5. Re-run tests to verify
 ```
 
-### For Automated Tasks
+### Pattern 2: Feature Development
+
 ```bash
-# Create an agent with tool access first
-opencode agent create my-tool-agent
-# Then use it with ocx
-ocx -a my-tool-agent <project_id> "automated task"
+# Develop a feature with full context and tools
+ocx -c full <project_id> "implement user authentication endpoint"
+
+# Agent has access to:
+# - Project structure and patterns (via context)
+# - File editing tools
+# - Test execution (run tests continuously)
+# - Documentation reading
 ```
 
-### For Testing
+### Pattern 3: Bug Investigation
+
 ```bash
-# Interactive mode gives best test feedback
-ocx -c full <project_id>
-# Type: "Run the unit tests in src/tests and fix any failures"
+# Investigate and fix a reported bug
+ocx -c code <project_id> "Debug: users can't log in after password reset. Find and fix the issue."
+
+# Agent can:
+# - Read code to understand flow
+# - Run tests to understand failure
+# - Trace through authentication logic
+# - Create/run failing test
+# - Fix the bug
+# - Verify with tests
+```
+
+### Pattern 4: Code Review & Improvements
+
+```bash
+# Review code and improve it
+ocx -c full <project_id> "review the API endpoints and suggest improvements. Fix any issues you find."
+
+# Full context + code access + tools allows:
+# - Understanding project rules
+# - Reviewing against standards
+# - Testing changes
+# - Documentation updates
+```
+
+### Pattern 5: Save Context Between Sessions
+
+```bash
+# Session 1: Do some work
+ocx <project_id> "analyze the codebase"
+# In TUI, agent finishes analysis and runs:
+#   ctx add-doc <id> note "Key findings: auth is JWT-based, uses async/await..." "Architecture Notes"
+
+# Session 2: Continue from where you left off
+ocx <project_id> "based on the architecture notes, implement..."
+# Context from previous session is available!
 ```

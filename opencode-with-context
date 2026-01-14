@@ -96,8 +96,7 @@ if [[ -z "$PROJECT_ID" ]]; then
 fi
 
 if [[ -z "$MESSAGE" ]]; then
-    # If no message and not explicitly non-interactive, default to interactive mode
-    # (which provides tool access)
+    # If no message, default to interactive mode (provides tool access)
     INTERACTIVE=true
 fi
 
@@ -234,48 +233,56 @@ if [[ "$INTERACTIVE" == "true" ]]; then
     # Interactive TUI mode - change to project directory
     cd "$PROJECT_PATH" 2>/dev/null || true
     
-    # For interactive TUI, context is embedded in the environment
-    # The user can access the context file if needed
+    # Show context details
     if [[ "$QUIET" == "false" ]]; then
         echo -e "${YELLOW}Starting interactive mode in: $PROJECT_PATH${NC}"
-        echo -e "${YELLOW}Context available in: $CONTEXT_FILE${NC}"
+        echo -e "${YELLOW}Context Mode: $CONTEXT_MODE${NC}"
+        if [[ -n "$MESSAGE" ]]; then
+            echo -e "${YELLOW}Initial prompt: $MESSAGE${NC}"
+        fi
         echo ""
     fi
     
-    # Run opencode with optional model and agent flags
-    opencode "$PROJECT_PATH" $MODEL_FLAG $AGENT_FLAG
+    # Build prompt for TUI if message is provided
+    if [[ -n "$MESSAGE" ]]; then
+        CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
+        PROMPT_TEXT="$CONTEXT_CONTENT
+
+---
+
+$MESSAGE"
+        # Use --prompt flag to pass message to interactive TUI
+        opencode "$PROJECT_PATH" --prompt "$PROMPT_TEXT" $MODEL_FLAG $AGENT_FLAG
+    else
+        # Run opencode with optional model and agent flags
+        opencode "$PROJECT_PATH" $MODEL_FLAG $AGENT_FLAG
+    fi
 else
-    # Run mode with message - for tool access, use agent if specified
-    # Otherwise prepend context to message
+    # Headless run mode with message
+    # This mode has limited tool access, warn user
+    if [[ "$QUIET" == "false" ]]; then
+        echo -e "${YELLOW}⚠ Running in headless mode (limited tool access)${NC}"
+        echo -e "${YELLOW}For better results with tool-dependent tasks, try interactive mode:${NC}"
+        echo -e "${YELLOW}  ocx $PROJECT_ID (without message to enter interactive mode)${NC}"
+        echo ""
+    fi
+    
     CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
     
-    if [[ -n "$AGENT" ]]; then
-        # When using an agent, prepend context and use agent flag
-        FULL_MESSAGE="SYSTEM INSTRUCTIONS:
-You are working on the '$PROJECT_NAME' project. The following project context has been provided for you. Study it carefully and use it to inform your responses. Do NOT ignore this context.
+    FULL_MESSAGE="PROJECT CONTEXT FOR '$PROJECT_NAME':
+================================================================================
 
 $CONTEXT_CONTENT
 
----
-
+================================================================================
 USER REQUEST:
+================================================================================
 
 $MESSAGE"
-        
+    
+    if [[ -n "$AGENT" ]]; then
         opencode run "$FULL_MESSAGE" $MODEL_FLAG $AGENT_FLAG
     else
-        # Without agent, fallback to standard context prepending
-        FULL_MESSAGE="SYSTEM INSTRUCTIONS:
-You are working on the '$PROJECT_NAME' project. The following project context has been provided for you. Study it carefully and use it to inform your responses. Do NOT ignore this context.
-
-$CONTEXT_CONTENT
-
----
-
-USER REQUEST:
-
-$MESSAGE"
-        
         opencode run "$FULL_MESSAGE" $MODEL_FLAG
     fi
 fi
