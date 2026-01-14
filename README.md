@@ -5,12 +5,15 @@ A shell-based context management system for AI coding agents. Automatically inde
 ## Features
 
 - Automatic project context indexing and tracking
+- **Git-aware indexing**: Automatically respects `.gitignore` rules
+- **Expanded exclusions**: Built-in protection against indexing `node_modules`, `.git`, `.next`, `.brv`, and other build/dev noise
 - Code structure extraction (functions, classes, methods)
 - Git-aware incremental updates
 - **Manual documentation support** (rules, docs, notes, prompts)
 - Agent-specific context storage and retrieval
 - Cross-platform support (Linux/macOS)
-- **Optional: ChromaDB + LlamaIndex for semantic search**
+- **Integrated semantic search**: ChromaDB + LlamaIndex available directly via `ctx search-v` and `ctx sync-v`
+- **Background syncing**: Semantic index automatically updates after reindexing or updates
 
 ## Installation
 
@@ -104,12 +107,25 @@ This means your AI assistant automatically knows:
 ### Project Management
 
 ```bash
-ctx init <path> [name]      # Initialize a new project
-ctx update <project_id>     # Incremental update (git changes)
-ctx reindex <project_id>    # Full reindex
-ctx list                    # List all projects
-ctx stats <project_id>      # Show statistics
+ctx init <path> [name]       # Initialize context for a project
+ctx init-agent <project_id>  # Generate AGENTS.md guide in project root
+ctx update <project_id>      # Incremental update (git changes)
+ctx reindex <project_id>     # Full reindex (respects .gitignore)
+ctx list                     # List all managed projects
+ctx stats <project_id>       # Show statistics
 ```
+
+
+### Semantic Search (Integrated)
+
+Semantic search understands **meaning**, not just keywords. The `ctx` command now provides integrated access to the vector store extension:
+
+```bash
+ctx sync-v <project_id>     # Manually sync current project to semantic index
+ctx search-v <project_id> "how does auth work?"  # Semantic search for logic
+```
+
+*Note: Semantic search is also triggered automatically in the background when you run `ctx reindex` or `ctx update`.*
 
 ### Context Retrieval
 
@@ -153,6 +169,14 @@ ctx rm-doc <project_id> <doc_id>     # Remove a doc
 ctx cleanup [days]    # Remove old context (default: 30 days)
 ctx help              # Show all commands
 ```
+
+### 🛠 Maintaining this Project
+
+If you are an agent working on the Context Dispatcher itself, run this to onboard:
+```bash
+ctx get-full 3da7ab8253e7d441
+```
+This will load all maintenance rules and architectural knowledge specific to this system.
 
 ## Semantic Search with ChromaDB + LlamaIndex
 
@@ -342,8 +366,8 @@ Project config (`~/.opencode/context/projects/<id>/config.json`):
 {
     "name": "Project Name",
     "path": "/path/to/project",
-    "exclude_patterns": ["node_modules", ".git", "dist", "build"],
-    "include_extensions": [".js", ".ts", ".py", ".rs", ".zsh", ".sh"],
+    "exclude_patterns": ["node_modules", ".git", "dist", "build", ".next", ".brv", ".cache"],
+    "include_extensions": [".js", ".ts", ".py", ".rs", ".zsh", ".sh", ".md", ".json"],
     "chunk_size": 2000,
     "max_files": 1000
 }
@@ -379,9 +403,13 @@ Non-fatal warnings from files with special characters. The script uses `LC_ALL=C
 
 ### ChromaDB/LlamaIndex errors
 
-Ensure dependencies are installed:
+Ensure dependencies are installed in the OpenCode venv:
 ```bash
-pip install chromadb llama-index llama-index-vector-stores-chroma
+~/.opencode/venv/bin/pip install chromadb llama-index llama-index-vector-stores-chroma
+```
+If you don't have a venv yet:
+```bash
+python3 -m venv ~/.opencode/venv
 ```
 
 ## Uninstallation

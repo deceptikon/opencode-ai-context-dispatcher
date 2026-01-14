@@ -17,6 +17,11 @@ echo ""
 echo "📁 Creating directories..."
 mkdir -p "$OPENCODE_HOME"/{bin,lib,templates,context/{projects,docs,agents,cache,logs},extensions}
 
+# Install prerequisites
+echo " Download and install prerequisites..."
+./install-ctx-prerequisites.sh
+echo "  ✓ prerequisites installed"
+
 # Copy core files
 echo "📋 Installing core files..."
 
@@ -59,6 +64,9 @@ echo "  ✓ ctx → ~/.local/bin/ctx"
 ln -sf "$OPENCODE_HOME/bin/ocx" "$HOME/.local/bin/ocx"
 echo "  ✓ ocx → ~/.local/bin/ocx"
 
+ln -sf "$OPENCODE_HOME/bin/ocx" "$HOME/.local/bin/opencode-with-context"
+echo "  ✓ opencode-with-context → ~/.local/bin/opencode-with-context"
+
 ln -sf "$OPENCODE_HOME/bin/ocx-onboard" "$HOME/.local/bin/ocx-onboard"
 echo "  ✓ ocx-onboard → ~/.local/bin/ocx-onboard"
 
@@ -74,6 +82,23 @@ for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"; do
         fi
     fi
 done
+
+# Setup Python virtual environment if not exists
+if command -v python3 &> /dev/null; then
+    if [[ ! -d "$OPENCODE_HOME/venv" ]]; then
+        echo "🐍 Creating Python virtual environment..."
+        # Prefer Python 3.12 for stability with heavy dependencies
+        PYTHON_STABLE="/usr/bin/python3.12"
+        if [[ -x "$PYTHON_STABLE" ]]; then
+            $PYTHON_STABLE -m venv "$OPENCODE_HOME/venv"
+        else
+            python3 -m venv "$OPENCODE_HOME/venv"
+        fi
+        echo "  ✓ venv created in $OPENCODE_HOME/venv"
+        echo "  ℹ Note: To enable semantic search, run:"
+        echo "    $OPENCODE_HOME/venv/bin/pip install chromadb llama-index llama-index-vector-stores-chroma"
+    fi
+fi
 
 # Verify installation
 echo ""
@@ -134,6 +159,27 @@ echo "   ctx list                    # List all projects"
 echo "   ocx-onboard <project-id>    # Run onboarding for a project"
 echo "   ocx <project-id>            # Start interactive mode"
 echo ""
+echo "󰃁 Quick start:"
+echo ""
+echo '  1. Initialize a project:'
+echo '     ctx init /path/to/project "Project Name"'
+echo ""
+echo "  2. Index the codebase:"
+echo "     ctx reindex <project_id>"
+echo ""
+echo "  3. Add rules/documentation:"
+echo '     ctx add-doc <project_id> rule "Always use TypeScript" "TS Rule"'
+echo ""
+echo "  4. Get full context for AI:"
+echo "     ctx get-full <project_id>"
+echo ""
+echo "  5. List projects:"
+echo "     ctx list"
+echo ""
+echo "  6. (Optional) Semantic search:"
+echo '     python ~/.opencode/extensions/vector_store.py index <project_id>'
+echo '     python ~/.opencode/extensions/vector_store.py search <project_id> "how does auth work"'
+echo ""
 echo "📖 Documentation:"
 echo "   - README.md                          - Main guide"
 echo "   - ONBOARDING_PROMPT_TEMPLATE.md     - Generic onboarding prompt"
@@ -141,3 +187,4 @@ echo "   - POC_TEST_GUIDE.md                 - How to test the system"
 echo ""
 echo "🔧 Everything is in: ~/.opencode/"
 echo ""
+echo "Run 'ctx help' for all commands."

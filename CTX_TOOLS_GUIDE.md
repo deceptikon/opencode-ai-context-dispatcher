@@ -117,6 +117,10 @@ In the interactive TUI, agent can now use ctx:
 run ctx list
 run ctx add-doc <id> rule "new rule" "title"
 run ctx get-docs <id>
+
+# NEW: Integrated semantic search
+run ctx search-v <id> "how does the auth work?"
+run ctx sync-v <id>
 ```
 
 ## Why Tool Access Differs by Mode

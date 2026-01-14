@@ -89,6 +89,9 @@ ctx list
 # View context
 ctx get <project-id>
 
+# NEW: Semantic search
+ctx search-v <project-id> "how does auth work?"
+
 # Add rules/notes for next session
 ctx add-doc <project-id> rule "Rule text" "Title"
 ctx add-doc <project-id> note "Note text" "Title"

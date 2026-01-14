@@ -183,7 +183,22 @@ CONTEXT_FILE="/tmp/opencode_context_$$.md"
         fi
     fi
     
-    echo "**Available tools**: ctx add-doc, ctx get-docs, ctx list-docs"
+    echo "🛑 STOP! READ THIS BEFORE STARTING! 🛑"
+    echo "## 🛠 MANDATORY AGENT PROTOCOL"
+    echo "You are working in a managed context. To succeed, you MUST follow these steps:"
+    echo "1. **Discovery**: Run 'ctx get-docs $PROJECT_ID rule' to see mandatory project standards."
+    echo "2. **Environment**: Tech stack details are in 'ctx get-docs $PROJECT_ID doc'."
+    echo "3. **Crucial Rule**: 'ctx' is NOT an AI tool. It is a CLI COMMAND."
+    echo "   - ❌ WRONG: ctx get-docs(id='...') "
+    echo "   - ✅ CORRECT: bash { command: 'ctx get-docs $PROJECT_ID rule' }"
+    echo "4. **Tools**: ALL commands (ls, yarn, git, ctx, etc.) MUST be executed via your 'bash' tool."
+    echo "5. **Verification**: Always run the project's quality checks (found in rules) before reporting completion."
+    echo ""
+    echo "**Example Correct Usage**:"
+    echo "bash { command: 'ctx get-docs $PROJECT_ID rule' }"
+    echo ""
+    echo "Available context commands: ctx add-doc, ctx get-docs, ctx list-docs, ctx search-v, ctx sync-v"
+    echo "---"
     echo ""
     
 } > "$CONTEXT_FILE"
@@ -226,11 +241,15 @@ if [[ "$INTERACTIVE" == "true" ]]; then
     # Build prompt for TUI if message is provided
     if [[ -n "$MESSAGE" ]]; then
         CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
-        PROMPT_TEXT="$CONTEXT_CONTENT
+        PROMPT_TEXT="🚨 CRITICAL PROJECT CONTEXT & AGENT PROTOCOL:
+$CONTEXT_CONTENT
 
----
+================================================================================
+YOUR SPECIFIC TASK:
+================================================================================
+$MESSAGE
 
-$MESSAGE"
+(Note: If you are new to this project, your first action must be to run 'ctx get-docs $PROJECT_ID rule' to understand mandatory standards.)"
         # Use --prompt flag to pass message to interactive TUI
         opencode "$PROJECT_PATH" --prompt "$PROMPT_TEXT" $MODEL_FLAG $AGENT_FLAG
     else

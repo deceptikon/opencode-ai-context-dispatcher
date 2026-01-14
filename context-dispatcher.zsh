@@ -123,27 +123,27 @@ sanitize_for_json() {
 init_context() {
     local raw_path="$1"
     local raw_name="$2"
-    
+
     # Sanitize inputs
     local project_path=$(sanitize_for_json "$raw_path")
     local project_name="${raw_name:-$($BASENAME_CMD "$project_path")}"
     project_name=$(sanitize_for_json "$project_name")
-    
+
     if [[ -z "$project_path" ]]; then
         log "Error: Project path is required"
         return 1
     fi
-    
+
     if [[ ! -d "$project_path" ]]; then
         log "Error: Project path '$project_path' does not exist"
         return 1
     fi
-    
+
     local project_id=$(generate_project_id "$project_path")
     local project_dir="$PROJECTS_DIR/$project_id"
-    
+
     mkdir -p "$project_dir"
-    
+
     # Create config using jq for proper JSON escaping
     $JQ_CMD -n \
         --arg name "$project_name" \
@@ -157,12 +157,12 @@ init_context() {
             created: $created,
             last_indexed: null,
             indexing_strategy: "git_latest+function_extract",
-            exclude_patterns: ["node_modules", ".git", "dist", "build", "*.log", "*.tmp"],
-            include_extensions: [".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".cpp", ".c", ".h", ".hpp", ".rb", ".php", ".swift", ".kt", ".scala", ".zsh", ".sh", ".bash"],
+            exclude_patterns: ["node_modules", ".git", "dist", "build", "*.log", "*.tmp", "__pycache__", ".mypy_cache", ".pytest_cache", "*.pyc", "target", "out", "coverage", "*.min.*", "*.map", ".DS_Store", ".ruff_cache", ".venv", "venv", "env", ".env", ".idea", ".vscode", "*.lock", ".cache", "tmp", ".brv", "vendor", "bower_components", ".next", ".nuxt", ".output", ".svelte-kit", "out-tsc", ".parcel-cache", ".cache-loader", ".eslintcache", ".stylelintcache", ".docz", ".cache", ".nyc_output", ".dynamodb", ".serverless", ".webpack", ".meteor"],
+            include_extensions: [".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".cpp", ".c", ".h", ".hpp", ".rb", ".php", ".swift", ".kt", ".scala", ".zsh", ".sh", ".bash", ".md", ".yaml", ".yml", ".json", ".sql", ".conf", ".ini", ".env", ".toml", ".mdx"],
             chunk_size: 2000,
             max_files: 1000
         }' > "$project_dir/config.json"
-    
+
     log "Initialized context for '$project_name' (ID: $project_id)"
     echo "$project_id"
 }
@@ -173,21 +173,21 @@ init_context() {
 update_context() {
     local project_id="$1"
     local project_dir="$PROJECTS_DIR/$project_id"
-    
+
     if [[ ! -d "$project_dir" ]]; then
         log "Error: Project '$project_id' not initialized"
         return 1
     fi
-    
+
     local config_path="$project_dir/config.json"
     local project_path=$($JQ_CMD -r ".path" "$config_path")
-    
+
     # Validate project path exists
     if [[ ! -d "$project_path" ]]; then
         log "Error: Project path '$project_path' no longer exists"
         return 1
     fi
-    
+
     # Check if git repository
     if [[ -d "$project_path/.git" ]]; then
         update_git_context "$project_id" "$project_path"
@@ -200,17 +200,17 @@ update_git_context() {
     local project_id="$1"
     local project_path="$2"
     local project_dir="$PROJECTS_DIR/$project_id"
-    
+
     log "Updating context via git changes..."
-    
+
     # Get files changed in last 5 commits
     local changed_files=$(git -C "$project_path" diff --name-only HEAD~5..HEAD 2>/dev/null)
-    
+
     if [[ -z "$changed_files" ]]; then
         # Fallback to recently modified files
         changed_files=$(get_recent_files "$project_path" 20)
     fi
-    
+
     # Process changed files
     local processed=0
     for file in ${(f)changed_files}; do
@@ -219,12 +219,12 @@ update_git_context() {
             processed=$((processed + 1))
         fi
     done
-    
+
     # Update timestamp
     $JQ_CMD --arg timestamp "$(date -Iseconds)" ".last_indexed = \$timestamp" \
         "$project_dir/config.json" > "$project_dir/config.tmp" \
         && mv "$project_dir/config.tmp" "$project_dir/config.json"
-    
+
     log "Updated $processed files for project $project_id"
 }
 
@@ -233,12 +233,12 @@ update_file_context() {
     local project_id="$1"
     local project_path="$2"
     local project_dir="$PROJECTS_DIR/$project_id"
-    
+
     log "Updating context via file modification times..."
-    
+
     # Get recently modified files
     local changed_files=$(get_recent_files "$project_path" 20)
-    
+
     # Process changed files
     local processed=0
     for file in ${(f)changed_files}; do
@@ -248,12 +248,12 @@ update_file_context() {
             processed=$((processed + 1))
         fi
     done
-    
+
     # Update timestamp
     $JQ_CMD --arg timestamp "$(date -Iseconds)" ".last_indexed = \$timestamp" \
         "$project_dir/config.json" > "$project_dir/config.tmp" \
         && mv "$project_dir/config.tmp" "$project_dir/config.json"
-    
+
     log "Updated $processed files for project $project_id"
 }
 
@@ -263,67 +263,121 @@ update_file_context() {
 reindex_context() {
     local project_id="$1"
     local project_dir="$PROJECTS_DIR/$project_id"
-    
+
     if [[ ! -d "$project_dir" ]]; then
         log "Error: Project '$project_id' not initialized"
         return 1
     fi
-    
+
     local config_path="$project_dir/config.json"
     local project_path=$($JQ_CMD -r ".path" "$config_path")
-    local exclude_patterns=($($JQ_CMD -r ".exclude_patterns[]" "$config_path"))
     local include_extensions=($($JQ_CMD -r ".include_extensions[]" "$config_path"))
-    
+
     log "Starting full reindex of $project_path..."
+
+    local file_list="/tmp/reindex_files_$$.txt"
     
-    # Build find command with exclusions
-    local find_cmd="find \"$project_path\" -type f"
+    # Use git ls-files if it's a git repo to respect .gitignore perfectly
+    if [[ -d "$project_path/.git" ]]; then
+        log "Detected git repository, using git ls-files for accurate context..."
+        # -c: tracked files, -o: untracked files, --exclude-standard: respect .gitignore
+        (cd "$project_path" && git ls-files -c -o --exclude-standard) | sed "s|^|$project_path/|" > "$file_list" 2>/dev/null
+    else
+        log "No git repository found, using find with exclusions..."
+        local exclude_patterns=($($JQ_CMD -r ".exclude_patterns[]" "$config_path"))
+        local find_cmd="find \"$project_path\" -type f"
+        
+        # Add extensions filter to find command if possible for speed
+        if [[ ${#include_extensions[@]} -gt 0 ]]; then
+            local ext_pattern=""
+            for ext in "${include_extensions[@]}"; do
+                [[ -z "$ext" ]] && continue
+                if [[ -z "$ext_pattern" ]]; then
+                    ext_pattern="-name \"*$ext\""
+                else
+                    ext_pattern="$ext_pattern -o -name \"*$ext\""
+                fi
+            done
+            find_cmd="$find_cmd \\( $ext_pattern \\)"
+        fi
+
+        # Add initial exclusions
+        for pattern in "${exclude_patterns[@]}"; do
+            find_cmd="$find_cmd -not -path \"*/$pattern/*\" -not -name \"$pattern\""
+        done
+
+        # Add .gitignore patterns if any exist despite no .git dir
+        local gitignore_patterns=($(parse_gitignore_patterns "$project_path"))
+        for pattern in "${gitignore_patterns[@]}"; do
+            find_cmd="$find_cmd -not -path \"*/$pattern/*\" -not -name \"$pattern\""
+        done
+        
+        eval "$find_cmd" > "$file_list" 2>/dev/null
+    fi
+
+    # Process files
+    local total_files=0
+    local filtered_list="/tmp/filtered_files_$$.txt"
+    local exclude_patterns=($($JQ_CMD -r ".exclude_patterns[]" "$config_path"))
     
-    # Add include extensions
-    if [[ ${#include_extensions[@]} -gt 0 ]]; then
-        local ext_pattern=""
-        for ext in "${include_extensions[@]}"; do
-            if [[ -n "$ext_pattern" ]]; then
-                ext_pattern="$ext_pattern -o -name \"*${ext}\""
-            else
-                ext_pattern="-name \"*${ext}\""
+    # Filter the file list using exclude_patterns
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        local skip=false
+        for pattern in "${exclude_patterns[@]}"; do
+            if [[ "$file" == *"/$pattern/"* || "$file" == *"/$pattern" || "$file" == "$pattern/"* || "$file" == "$pattern" ]]; then
+                skip=true
+                break
+            fi
+            # Handle glob-like patterns in exclusions (very simple version)
+            if [[ "$pattern" == *"*"* ]]; then
+                local regex_pattern="${pattern//./\\.}"
+                regex_pattern="${regex_pattern//\*/.*}"
+                if [[ "$file" =~ "$regex_pattern" ]]; then
+                    skip=true
+                    break
+                fi
             fi
         done
-        find_cmd="$find_cmd \\( $ext_pattern \\)"
-    fi
-    
-    # Add exclusions
-    for pattern in "${exclude_patterns[@]}"; do
-        find_cmd="$find_cmd -not -path \"*/$pattern/*\""
-    done
-    
+        [[ "$skip" == true ]] && continue
+        echo "$file" >> "$filtered_list"
+    done < "$file_list"
+    mv "$filtered_list" "$file_list"
+
     # Initialize index file
     local index_file="$project_dir/index.json"
     echo '{"files": {}, "chunks": [], "stats": {}}' > "$index_file"
-    
-    # Execute find and process files
-    local total_files=0
-    local file_list="/tmp/reindex_files_$$.txt"
-    eval "$find_cmd" > "$file_list" 2>/dev/null
-    
+
     while IFS= read -r file; do
         [[ -z "$file" ]] && continue
+        
+        # Extension check (redundant but safe)
+        local ext="${file##*.}"
+        local match=false
+        for include_ext in "${include_extensions[@]}"; do
+            if [[ ".$ext" == "$include_ext" || "$file" == *"$include_ext" ]]; then
+                match=true
+                break
+            fi
+        done
+        [[ "$match" == false ]] && continue
+
         local rel_path="${file#$project_path/}"
         index_single_file "$project_id" "$file" "$rel_path"
         total_files=$((total_files + 1))
-        
+
         # Progress indicator
         if [[ $((total_files % 50)) -eq 0 ]]; then
             log "Processed $total_files files..."
         fi
     done < "$file_list"
     rm -f "$file_list"
-    
+
     # Update timestamp
     $JQ_CMD --arg timestamp "$(date -Iseconds)" ".last_indexed = \$timestamp" \
         "$project_dir/config.json" > "$project_dir/config.tmp" \
         && mv "$project_dir/config.tmp" "$project_dir/config.json"
-    
+
     log "Reindexed $total_files files for project $project_id"
 }
 
@@ -332,16 +386,16 @@ index_single_file() {
     local project_id="$1"
     local file_path="$2"
     local rel_path="$3"
-    
+
     local project_dir="$PROJECTS_DIR/$project_id"
     local index_file="$project_dir/index.json"
     local chunk_size=$($JQ_CMD -r ".chunk_size" "$project_dir/config.json")
-    
+
     # Create index file if doesn't exist
     if [[ ! -f "$index_file" ]]; then
         echo '{"files": {}, "chunks": [], "stats": {}}' > "$index_file"
     fi
-    
+
     # Skip binary files (but allow text executables like scripts)
     local file_type=$(file -b "$file_path" 2>/dev/null)
     if echo "$file_type" | grep -qi "binary\|data\|image\|audio\|video\|archive\|compressed"; then
@@ -349,13 +403,13 @@ index_single_file() {
             return
         fi
     fi
-    
+
     # Extract content
     local content=$(cat "$file_path" 2>/dev/null)
     if [[ -z "$content" ]]; then
         return
     fi
-    
+
     # Extract functions/methods/classes
     local extracted=""
     if [[ "$file_path" == *.js || "$file_path" == *.jsx || "$file_path" == *.ts || "$file_path" == *.tsx ]]; then
@@ -367,12 +421,12 @@ index_single_file() {
     else
         extracted="$content"
     fi
-    
+
     # Create chunks
     local chunks=()
     local chunk=""
     local lines=(${(f)extracted})
-    
+
     for line in "${lines[@]}"; do
         if [[ ${#chunk} -gt $chunk_size ]]; then
             chunks+=("$chunk")
@@ -381,21 +435,21 @@ index_single_file() {
         chunk+="$line"$'
 '
     done
-    
+
     if [[ -n "$chunk" ]]; then
         chunks+=("$chunk")
     fi
-    
+
     # Update index
     local temp_file="$index_file.tmp"
-    
+
     # Add file metadata
     $JQ_CMD --arg path "$rel_path" \
        --arg modified "$(get_mtime "$file_path")" \
        --arg size "$(get_fsize "$file_path")" \
        '.files[$path] = {"modified": $modified, "size": $size, "chunks": []}' \
        "$index_file" > "$temp_file"
-    
+
     # Add chunks
     local chunk_index=0
     local chunk_tmp="/tmp/chunk_content_$$.txt"
@@ -412,7 +466,7 @@ index_single_file() {
         chunk_index=$((chunk_index + 1))
     done
     rm -f "$chunk_tmp"
-    
+
     mv "$temp_file" "$index_file"
 }
 
@@ -441,15 +495,15 @@ get_context() {
     local project_id="$1"
     local query="${2:-''}"
     local limit="${3:-10}"
-    
+
     local project_dir="$PROJECTS_DIR/$project_id"
     local index_file="$project_dir/index.json"
-    
+
     if [[ ! -f "$index_file" ]]; then
         log "Error: Project '$project_id' not indexed"
         return 1
     fi
-    
+
     if [[ -z "$query" ]]; then
         # Return recent chunks
         jq -r ".chunks[-${limit}:][] | .content" "$index_file"
@@ -486,10 +540,10 @@ save_agent_context() {
     local agent_name="$1"
     local context_text="$2"
     local tags="${3:-general}"
-    
+
     local agent_file="$AGENTS_DIR/${agent_name}.jsonl"
     local entry_id=$(generate_uuid)
-    
+
     # Create entry
     local entry=$($JQ_CMD -n \
         --arg id "$entry_id" \
@@ -498,17 +552,17 @@ save_agent_context() {
         --arg timestamp "$(date -Iseconds)" \
         --arg agent "$agent_name" \
         '{id: $id, text: $text, tags: $tags, timestamp: $timestamp, agent: $agent}')
-    
+
     # Append to agent's context log
     echo "$entry" >> "$agent_file"
-    
+
     # Also add to shared agent cache (last 100 entries)
     local cache_file="$CACHE_DIR/agent_context.jsonl"
     echo "$entry" >> "$cache_file"
-    
+
     # Trim cache to last 100 entries
     tail -n 100 "$cache_file" > "$cache_file.tmp" && mv "$cache_file.tmp" "$cache_file"
-    
+
     log "Agent '$agent_name' saved context: $entry_id"
     echo "$entry_id"
 }
@@ -517,13 +571,13 @@ save_agent_context() {
 search_agent_context() {
     local agent_name="$1"
     local query="$2"
-    
+
     local agent_file="$AGENTS_DIR/${agent_name}.jsonl"
-    
+
     if [[ ! -f "$agent_file" ]]; then
         return 1
     fi
-    
+
     if [[ -z "$query" ]]; then
         # Return last 10 entries
         tail -n 10 "$agent_file" | $JQ_CMD -r ".text"
@@ -556,23 +610,23 @@ list_projects() {
 project_stats() {
     local project_id="$1"
     local project_dir="$PROJECTS_DIR/$project_id"
-    
+
     if [[ ! -d "$project_dir" ]]; then
         log "Project not found: $project_id"
         return 1
     fi
-    
+
     local index_file="$project_dir/index.json"
-    
+
     if [[ ! -f "$index_file" ]] || [[ ! -s "$index_file" ]]; then
         echo "No index found for project. Run: ctx reindex $project_id"
         return
     fi
-    
+
     local files_count=$($JQ_CMD ".files | length" "$index_file" 2>/dev/null)
     local chunks_count=$($JQ_CMD ".chunks | length" "$index_file" 2>/dev/null)
     local total_size=$($JQ_CMD "[.chunks[].content | length] | add // 0" "$index_file" 2>/dev/null)
-    
+
     echo "Project Statistics:"
     echo "  Files: ${files_count:-0}"
     echo "  Chunks: ${chunks_count:-0}"
@@ -597,28 +651,28 @@ add_doc() {
     local doc_type="$2"  # rule, doc, note, prompt
     local content="$3"
     local title="${4:-untitled}"
-    
+
     if [[ -z "$project_id" ]] || [[ -z "$doc_type" ]] || [[ -z "$content" ]]; then
         echo "Usage: ctx add-doc <project_id> <type> <content> [title]"
         echo "Types: rule, doc, note, prompt"
         return 1
     fi
-    
+
     local project_docs="$DOCS_DIR/$project_id"
     mkdir -p "$project_docs"
-    
+
     local doc_file="$project_docs/docs.jsonl"
     local doc_id=$(generate_uuid)
-    
-    local entry=$($JQ_CMD -n \
+
+    # Create entry using jq and append directly to avoid shell string issues
+    $JQ_CMD -c -n \
         --arg id "$doc_id" \
         --arg type "$doc_type" \
         --arg title "$title" \
         --arg content "$content" \
         --arg timestamp "$(date -Iseconds)" \
-        '{id: $id, type: $type, title: $title, content: $content, timestamp: $timestamp}')
+        '{id: $id, type: $type, title: $title, content: $content, timestamp: $timestamp}' >> "$doc_file"
     
-    echo "$entry" >> "$doc_file"
     log "Added $doc_type: $title ($doc_id)"
     echo "$doc_id"
 }
@@ -629,12 +683,12 @@ add_doc_file() {
     local doc_type="$2"
     local file_path="$3"
     local title="${4:-$($BASENAME_CMD "$file_path")}"
-    
+
     if [[ ! -f "$file_path" ]]; then
         echo "Error: File not found: $file_path"
         return 1
     fi
-    
+
     local content=$(cat "$file_path")
     add_doc "$project_id" "$doc_type" "$content" "$title"
 }
@@ -643,14 +697,14 @@ add_doc_file() {
 list_docs() {
     local project_id="$1"
     local doc_type="$2"  # optional filter
-    
+
     local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
-    
+
     if [[ ! -f "$doc_file" ]]; then
         echo "No documents found for project $project_id"
         return
     fi
-    
+
     echo "Documents for project $project_id:"
     if [[ -n "$doc_type" ]]; then
         $JQ_CMD -r "select(.type == \"$doc_type\") | \"  [\(.type)] \(.title) (\(.id))\"" "$doc_file"
@@ -663,13 +717,13 @@ list_docs() {
 get_docs() {
     local project_id="$1"
     local doc_type="$2"  # optional filter
-    
+
     local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
-    
+
     if [[ ! -f "$doc_file" ]]; then
         return
     fi
-    
+
     if [[ -n "$doc_type" ]]; then
         $JQ_CMD -r "select(.type == \"$doc_type\") | \"## \(.title)\n\(.content)\n\"" "$doc_file"
     else
@@ -681,14 +735,14 @@ get_docs() {
 remove_doc() {
     local project_id="$1"
     local doc_id="$2"
-    
+
     local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
-    
+
     if [[ ! -f "$doc_file" ]]; then
         echo "No documents found"
         return 1
     fi
-    
+
     grep -v "\"id\":\"$doc_id\"" "$doc_file" > "${doc_file}.tmp"
     mv "${doc_file}.tmp" "$doc_file"
     log "Removed document: $doc_id"
@@ -698,32 +752,32 @@ remove_doc() {
 edit_doc() {
     local project_id="$1"
     local doc_id="$2"
-    
+
     local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
     local tmp_file="/tmp/ctx_edit_$$.md"
-    
+
     # Extract content
     $JQ_CMD -r "select(.id == \"$doc_id\") | .content" "$doc_file" > "$tmp_file"
-    
+
     if [[ ! -s "$tmp_file" ]]; then
         echo "Document not found: $doc_id"
         rm -f "$tmp_file"
         return 1
     fi
-    
+
     # Open in editor
     ${EDITOR:-vim} "$tmp_file"
-    
+
     # Update content
     local new_content=$(cat "$tmp_file")
     local updated=$($JQ_CMD -r "select(.id == \"$doc_id\")" "$doc_file" | \
         $JQ_CMD --arg content "$new_content" '.content = $content')
-    
+
     # Replace in file
     grep -v "\"id\":\"$doc_id\"" "$doc_file" > "${doc_file}.tmp"
     echo "$updated" >> "${doc_file}.tmp"
     mv "${doc_file}.tmp" "$doc_file"
-    
+
     rm -f "$tmp_file"
     log "Updated document: $doc_id"
 }
@@ -732,21 +786,107 @@ edit_doc() {
 get_full_context() {
     local project_id="$1"
     local query="$2"
-    
+
     echo "=== PROJECT RULES ==="
     get_docs "$project_id" "rule"
-    
+
     echo "=== PROJECT DOCS ==="
     get_docs "$project_id" "doc"
-    
+
     echo "=== CUSTOM PROMPTS ==="
     get_docs "$project_id" "prompt"
-    
+
     echo "=== CODE CONTEXT ==="
     get_context "$project_id" "$query"
-    
+
     echo "=== NOTES ==="
     get_docs "$project_id" "note"
+}
+
+# --------------------------------------------------------
+# Handler 8: Agent Onboarding & Guide Generation
+# --------------------------------------------------------
+
+# Generate AGENTS.md guide in the project root
+generate_agent_guide() {
+    local project_id="$1"
+    local project_dir="$PROJECTS_DIR/$project_id"
+
+    if [[ ! -d "$project_dir" ]]; then
+        log "Error: Project '$project_id' not initialized"
+        return 1
+    fi
+
+    local config_path="$project_dir/config.json"
+    local project_path=$($JQ_CMD -r ".path" "$config_path")
+    local project_name=$($JQ_CMD -r ".name" "$config_path")
+
+    if [[ ! -d "$project_path" ]]; then
+        log "Error: Project path '$project_path' not found"
+        return 1
+    fi
+
+    local guide_path="$project_path/AGENTS.md"
+    
+    cat << EOF > "$guide_path"
+# 🤖 Agent Onboarding & Context Guide: $project_name
+
+Welcome, Agent! This project uses the **OpenCode Context Dispatcher** to manage project-specific knowledge, rules, and workflows.
+
+## 🆔 Project Identity
+- **Project Name**: $project_name
+- **Project ID**: $project_id
+
+## 🚀 How to Onboard Yourself
+If you are new to this project or the context feels "cold", follow these steps to warm up:
+
+### 1. Load Full Context
+Get all established rules, documentation, and code structure:
+\`\`\`bash
+ctx get-full $project_id
+\`\`\`
+
+### 2. Semantic Exploration
+If you need to understand *how* something works conceptually:
+\`\`\`bash
+ctx search-v $project_id "how does the authentication flow work?"
+\`\`\`
+
+### 3. Identify Tools & Workflows
+Check for project-specific commands (testing, linting, building):
+\`\`\`bash
+ctx get-docs $project_id rule
+\`\`\`
+
+## 🛠 Essential Commands
+- \`ctx list-docs $project_id\` - See all available documentation
+- \`ctx stats $project_id\` - Check indexing status
+- \`ctx update $project_id\` - Sync latest git changes to context
+
+## ✍️ Contributing to Context
+When you discover a new pattern, fix a complex bug, or identify a recurring issue, **save it for future agents**:
+
+\`\`\`bash
+# Add a new rule
+ctx add-doc $project_id rule "Always use 'uv run pytest' for testing" "Testing Standard"
+
+# Add a workflow note
+ctx add-doc $project_id note "To fix DB migration issues, run: rm dev.db && python manage.py migrate" "DB Troubleshooting"
+\`\`\`
+
+## 📋 Onboarding Checklist (For First Session)
+If this is the first time an agent is working here, please:
+1. [ ] Explore the directory structure (\`ls -R\`)
+2. [ ] Identify the tech stack (\`package.json\`, \`requirements.txt\`, etc.)
+3. [ ] Test the build/test commands
+4. [ ] Document your findings using \`ctx add-doc\`
+
+---
+*Generated by OpenCode Context Dispatcher*
+EOF
+
+    log "Generated agent guide at $guide_path"
+    echo "$guide_path"
 }
 
 # --------------------------------------------------------
@@ -756,6 +896,9 @@ context() {
     case "$1" in
         init)
             init_context "$2" "$3"
+            ;;
+        init-agent)
+            generate_agent_guide "$2"
             ;;
         update)
             update_context "$2"
@@ -802,15 +945,20 @@ context() {
         cleanup)
             cleanup_old_context "$2"
             ;;
-        help|*)
+         help|*)
             echo "Context Dispatcher Commands:"
             echo ""
             echo "Project Management:"
             echo "  init <path> [name]       Initialize context for a project"
+            echo "  init-agent <id>          Generate AGENTS.md guide in project root"
             echo "  update <project_id>      Incremental update from git"
             echo "  reindex <project_id>     Full reindex of project"
             echo "  list                     List all managed projects"
             echo "  stats <project_id>       Show project statistics"
+            echo ""
+            echo "Semantic Search (Vector Store):"
+            echo "  sync-v <id>              Sync project to semantic index"
+            echo "  search-v <id> <query>    Search code by meaning"
             echo ""
             echo "Context Retrieval:"
             echo "  get <project_id> [query] Get code context (optional search)"
@@ -834,8 +982,38 @@ context() {
     esac
 }
 
-alias ctx="source ~/.opencode/context-dispatcher.zsh && ~/.opencode/context"
-pwd
-echo "ctx-tool init finished"
-ctx
+# alias ctx="source ~/.opencode/context-dispatcher.zsh && ~/.opencode/context"
+# pwd
+# echo "ctx-tool init finished"
+# ctx
 
+# Parse .gitignore for exclusion patterns
+parse_gitignore_patterns() {
+    local project_path="$1"
+    local gitignore_path="$project_path/.gitignore"
+    
+    if [[ ! -f "$gitignore_path" ]]; then
+        return
+    fi
+
+    # Use grep to find non-comment, non-empty lines from .gitignore
+    grep -v '^\s*#' "$gitignore_path" | grep -v '^\s*$' | while read -r pattern; do
+        # Trim leading/trailing whitespace
+        pattern=$(echo "$pattern" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        
+        # Ignore absolute paths or paths starting with ! (negation)
+        [[ "$pattern" == /* ]] && continue
+        [[ "$pattern" == !* ]] && continue
+        
+        # Handle directory matching (** for recursive, * for single-level)
+        pattern=$(echo "$pattern" | sed -e 's/\*\*/.*/')
+        
+        # Escape some regex special chars
+        pattern=$(echo "$pattern" | sed -e 's/\./\\./g')
+        
+        # Convert glob pattern to regex-like path matching
+        pattern=$(echo "$pattern" | sed -e 's/\*/[^/]*/')
+        
+        echo "$pattern"
+    done
+}
