@@ -112,13 +112,12 @@ if [[ ! -f "$DISPATCHER" ]]; then
     exit 1
 fi
 
-# Source in zsh subshell to get functions
-# Suppress stderr to avoid jq parse errors from corrupted index files causing set -e to exit
+# Read context data directly from JSONL files (no zsh needed)
+# This is much faster and more reliable than sourcing zsh
 get_context_data() {
-    zsh -c "
-        source '$DISPATCHER'
-        $1
-    " 2>/dev/null || true
+    # This function is kept for compatibility but mostly unused now
+    # Context is injected directly in the prompt below
+    true
 }
 
 # Verify project exists
@@ -133,82 +132,59 @@ fi
 PROJECT_NAME=$(jq -r '.name' "$PROJECT_DIR/config.json" 2>/dev/null || echo "Unknown")
 PROJECT_PATH=$(jq -r '.path' "$PROJECT_DIR/config.json" 2>/dev/null || echo "Unknown")
 
-# Build context based on mode
+# Build context - use Python ctx tool to extract from JSONL
 CONTEXT_FILE="/tmp/opencode_context_$$.md"
 
 {
-    echo "# 📚 PROJECT CONTEXT"
+    echo "# 📚 PROJECT CONTEXT: $PROJECT_NAME"
     echo ""
-    echo "Context Mode: $CONTEXT_MODE"
-    echo "Project: $PROJECT_NAME (ID: $PROJECT_ID)"
-    echo "Path: $PROJECT_PATH"
+    echo "**Project ID**: $PROJECT_ID"
+    echo "**Path**: $PROJECT_PATH"
+    echo "**Mode**: $CONTEXT_MODE"
     echo ""
     echo "---"
     echo ""
-    echo "# Project Context: $PROJECT_NAME"
-    echo ""
-    echo "Project Path: $PROJECT_PATH"
-    echo "Project ID: $PROJECT_ID"
-    echo ""
     
-    # Rules (for full, rules, docs modes)
-    if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "rules" || "$CONTEXT_MODE" == "docs" ]]; then
-        RULES=$(get_context_data "get_docs '$PROJECT_ID' rule")
-        if [[ -n "$RULES" ]]; then
-            echo "## Project Rules"
-            echo ""
-            echo "Follow these rules when making changes:"
-            echo ""
-            echo "$RULES"
-            echo ""
-        fi
-    fi
+    # Load context from JSONL using grep (fast, no external commands)
+    DOCS_FILE="$HOME/.opencode/context/docs/$PROJECT_ID/docs.jsonl"
     
-    # Documentation (for full, docs modes)
-    if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "docs" ]]; then
-        DOCS=$(get_context_data "get_docs '$PROJECT_ID' doc")
-        if [[ -n "$DOCS" ]]; then
-            echo "## Documentation"
-            echo ""
-            echo "$DOCS"
-            echo ""
+    if [[ -f "$DOCS_FILE" ]]; then
+        # Extract and display rules
+        if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "rules" || "$CONTEXT_MODE" == "docs" ]]; then
+            RULES_COUNT=$(grep '"type": "rule"' "$DOCS_FILE" 2>/dev/null | wc -l)
+            if [[ $RULES_COUNT -gt 0 ]]; then
+                echo "## Project Rules ($RULES_COUNT)"
+                echo ""
+                grep '"type": "rule"' "$DOCS_FILE" | jq -r '.title + ": " + .content' 2>/dev/null | head -10
+                echo ""
+            fi
         fi
         
-        # Custom prompts
-        PROMPTS=$(get_context_data "get_docs '$PROJECT_ID' prompt")
-        if [[ -n "$PROMPTS" ]]; then
-            echo "## Custom Instructions"
-            echo ""
-            echo "$PROMPTS"
-            echo ""
+        # Extract and display docs
+        if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "docs" ]]; then
+            DOCS_COUNT=$(grep '"type": "doc"' "$DOCS_FILE" 2>/dev/null | wc -l)
+            if [[ $DOCS_COUNT -gt 0 ]]; then
+                echo "## Documentation ($DOCS_COUNT)"
+                echo ""
+                grep '"type": "doc"' "$DOCS_FILE" | jq -r '.title + ": " + .content' 2>/dev/null | head -10
+                echo ""
+            fi
+        fi
+        
+        # Extract and display notes
+        if [[ "$CONTEXT_MODE" == "full" ]]; then
+            NOTES_COUNT=$(grep '"type": "note"' "$DOCS_FILE" 2>/dev/null | wc -l)
+            if [[ $NOTES_COUNT -gt 0 ]]; then
+                echo "## Notes & Workflows ($NOTES_COUNT)"
+                echo ""
+                grep '"type": "note"' "$DOCS_FILE" | jq -r '.title + ": " + .content' 2>/dev/null | head -10
+                echo ""
+            fi
         fi
     fi
     
-    # Code context (for full, code modes)
-    if [[ "$CONTEXT_MODE" == "full" || "$CONTEXT_MODE" == "code" ]]; then
-        CODE=$(get_context_data "get_context '$PROJECT_ID' '' 15")
-        if [[ -n "$CODE" ]]; then
-            echo "## Code Context"
-            echo ""
-            echo "Recent code structures from the project:"
-            echo ""
-            echo '```'
-            echo "$CODE"
-            echo '```'
-            echo ""
-        fi
-    fi
-    
-    # Notes (for full mode only)
-    if [[ "$CONTEXT_MODE" == "full" ]]; then
-        NOTES=$(get_context_data "get_docs '$PROJECT_ID' note")
-        if [[ -n "$NOTES" ]]; then
-            echo "## Notes"
-            echo ""
-            echo "$NOTES"
-            echo ""
-        fi
-    fi
+    echo "**Available tools**: ctx add-doc, ctx get-docs, ctx list-docs"
+    echo ""
     
 } > "$CONTEXT_FILE"
 
