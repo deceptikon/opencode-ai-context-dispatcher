@@ -834,3 +834,8 @@ context() {
     esac
 }
 
+alias ctx="source ~/.opencode/context-dispatcher.zsh && ~/.opencode/context"
+pwd
+echo "ctx-tool init finished"
+ctx
+
