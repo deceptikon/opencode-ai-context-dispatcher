@@ -1,57 +1,244 @@
 #!/bin/bash
-# Wrapper for opencode with context injection
+# Wrapper for opencode with automatic context injection
+# Injects project rules, documentation, and code context before your prompt
 
 set -e
 
-PROJECT_ID="$1"
-shift
-COMMAND="$*"
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-if [[ -z "$PROJECT_ID" ]] || [[ -z "$COMMAND" ]]; then
-    echo "Usage: opencode-with-context <project_id> <opencode_command>"
+show_help() {
+    echo "Usage: ocx [OPTIONS] <project_id> [message...]"
     echo ""
-    echo "Arguments:"
-    echo "  project_id       The project ID (use 'ctx list' to see available projects)"
-    echo "  opencode_command The command to pass to opencode"
+    echo "Run opencode with automatic project context injection."
+    echo ""
+    echo "Options:"
+    echo "  -m, --mode MODE    Context mode: full, rules, code, docs (default: full)"
+    echo "  -i, --interactive  Start interactive TUI instead of run mode"
+    echo "  -q, --quiet        Don't show context summary"
+    echo "  -h, --help         Show this help"
+    echo ""
+    echo "Modes:"
+    echo "  full   - Inject rules + docs + code context (default)"
+    echo "  rules  - Inject only project rules"
+    echo "  code   - Inject only code context"
+    echo "  docs   - Inject rules + documentation (no code)"
+    echo ""
+    echo "Examples:"
+    echo "  ocx abc123 'fix the login bug'"
+    echo "  ocx -m rules abc123 'review this code'"
+    echo "  ocx -i abc123                          # Interactive mode"
+    echo ""
+    echo "Use 'ctx list' to see available project IDs."
+}
+
+# Parse arguments
+MODE="full"
+INTERACTIVE=false
+QUIET=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -m|--mode)
+            MODE="$2"
+            shift 2
+            ;;
+        -i|--interactive)
+            INTERACTIVE=true
+            shift
+            ;;
+        -q|--quiet)
+            QUIET=true
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -*)
+            echo -e "${RED}Unknown option: $1${NC}"
+            show_help
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+PROJECT_ID="$1"
+shift 2>/dev/null || true
+MESSAGE="$*"
+
+if [[ -z "$PROJECT_ID" ]]; then
+    echo -e "${RED}Error: Project ID required${NC}"
+    echo ""
+    show_help
+    exit 1
+fi
+
+if [[ -z "$MESSAGE" ]] && [[ "$INTERACTIVE" == "false" ]]; then
+    echo -e "${RED}Error: Message required (or use -i for interactive mode)${NC}"
+    echo ""
+    show_help
     exit 1
 fi
 
 # Load context dispatcher
-if [[ -f "$HOME/.opencode/context-dispatcher.zsh" ]]; then
-    source "$HOME/.opencode/context-dispatcher.zsh"
-else
-    echo "Error: Context dispatcher not found. Please run install-context-dispatcher.sh first."
+DISPATCHER="$HOME/.opencode/context-dispatcher.zsh"
+if [[ ! -f "$DISPATCHER" ]]; then
+    echo -e "${RED}Error: Context dispatcher not found.${NC}"
+    echo "Please run install-context-dispatcher.sh first."
     exit 1
 fi
+
+# Source in zsh subshell to get functions
+get_context_data() {
+    zsh -c "
+        source '$DISPATCHER'
+        $1
+    " 2>/dev/null
+}
 
 # Verify project exists
 PROJECT_DIR="$HOME/.opencode/context/projects/$PROJECT_ID"
 if [[ ! -d "$PROJECT_DIR" ]]; then
-    echo "Error: Project '$PROJECT_ID' not found."
-    echo "Use 'ctx list' to see available projects or 'ctx init <path>' to create one."
+    echo -e "${RED}Error: Project '$PROJECT_ID' not found.${NC}"
+    echo "Use 'ctx list' to see available projects."
     exit 1
 fi
 
-# Get relevant context
-CONTEXT=$(get_context "$PROJECT_ID" "" 20)
+# Get project info
+PROJECT_NAME=$(jq -r '.name' "$PROJECT_DIR/config.json" 2>/dev/null || echo "Unknown")
+PROJECT_PATH=$(jq -r '.path' "$PROJECT_DIR/config.json" 2>/dev/null || echo "Unknown")
 
-# Create temporary context file
-CONTEXT_FILE="/tmp/opencode_context_$$.txt"
+# Build context based on mode
+CONTEXT_FILE="/tmp/opencode_context_$$.md"
+
 {
-    echo "=== PROJECT CONTEXT ==="
-    echo "$CONTEXT"
+    echo "# Project Context: $PROJECT_NAME"
     echo ""
-    echo "=== COMMAND ==="
-    echo "$COMMAND"
+    echo "Project Path: $PROJECT_PATH"
+    echo "Project ID: $PROJECT_ID"
+    echo ""
+    
+    # Rules (for full, rules, docs modes)
+    if [[ "$MODE" == "full" || "$MODE" == "rules" || "$MODE" == "docs" ]]; then
+        RULES=$(get_context_data "get_docs '$PROJECT_ID' rule")
+        if [[ -n "$RULES" ]]; then
+            echo "## Project Rules"
+            echo ""
+            echo "Follow these rules when making changes:"
+            echo ""
+            echo "$RULES"
+            echo ""
+        fi
+    fi
+    
+    # Documentation (for full, docs modes)
+    if [[ "$MODE" == "full" || "$MODE" == "docs" ]]; then
+        DOCS=$(get_context_data "get_docs '$PROJECT_ID' doc")
+        if [[ -n "$DOCS" ]]; then
+            echo "## Documentation"
+            echo ""
+            echo "$DOCS"
+            echo ""
+        fi
+        
+        # Custom prompts
+        PROMPTS=$(get_context_data "get_docs '$PROJECT_ID' prompt")
+        if [[ -n "$PROMPTS" ]]; then
+            echo "## Custom Instructions"
+            echo ""
+            echo "$PROMPTS"
+            echo ""
+        fi
+    fi
+    
+    # Code context (for full, code modes)
+    if [[ "$MODE" == "full" || "$MODE" == "code" ]]; then
+        CODE=$(get_context_data "get_context '$PROJECT_ID' '' 15")
+        if [[ -n "$CODE" ]]; then
+            echo "## Code Context"
+            echo ""
+            echo "Recent code structures from the project:"
+            echo ""
+            echo '```'
+            echo "$CODE"
+            echo '```'
+            echo ""
+        fi
+    fi
+    
+    # Notes (for full mode only)
+    if [[ "$MODE" == "full" ]]; then
+        NOTES=$(get_context_data "get_docs '$PROJECT_ID' note")
+        if [[ -n "$NOTES" ]]; then
+            echo "## Notes"
+            echo ""
+            echo "$NOTES"
+            echo ""
+        fi
+    fi
+    
 } > "$CONTEXT_FILE"
 
-# Run opencode with context
-opencode --context-file "$CONTEXT_FILE"
+# Show summary unless quiet
+if [[ "$QUIET" == "false" ]]; then
+    CONTEXT_SIZE=$(wc -c < "$CONTEXT_FILE")
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}Project:${NC} $PROJECT_NAME"
+    echo -e "${GREEN}Mode:${NC} $MODE"
+    echo -e "${GREEN}Context:${NC} $CONTEXT_SIZE bytes injected"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+fi
+
+# Run opencode
+if [[ "$INTERACTIVE" == "true" ]]; then
+    # Interactive TUI mode - change to project directory
+    cd "$PROJECT_PATH" 2>/dev/null || true
+    
+    # For interactive, we can't easily inject context
+    # But we can set it as initial message
+    echo -e "${YELLOW}Starting interactive mode in: $PROJECT_PATH${NC}"
+    echo -e "${YELLOW}Tip: The context file is at: $CONTEXT_FILE${NC}"
+    echo ""
+    
+    opencode "$PROJECT_PATH"
+else
+    # Run mode with message
+    FULL_MESSAGE=$(cat <<EOF
+$MESSAGE
+
+---
+Context from project "$PROJECT_NAME" has been loaded. Use it to understand the codebase.
+The context includes: $(echo "$MODE" | sed 's/full/rules, documentation, code, and notes/; s/rules/project rules only/; s/code/code context only/; s/docs/rules and documentation/')
+EOF
+)
+    
+    # Use opencode run with context prepended to message
+    CONTEXT_CONTENT=$(cat "$CONTEXT_FILE")
+    
+    FULL_PROMPT="$CONTEXT_CONTENT
+
+---
+
+# User Request
+
+$MESSAGE"
+    
+    opencode run "$FULL_PROMPT"
+fi
 
 # Cleanup
 rm -f "$CONTEXT_FILE"
 
-# Save the interaction to agent context
+# Save interaction to agent context if AGENT_NAME is set
 if [[ -n "$AGENT_NAME" ]]; then
-    save_agent_context "$AGENT_NAME" "Ran: $COMMAND with context from $PROJECT_ID"
+    get_context_data "save_agent_context '$AGENT_NAME' 'Ran: $MESSAGE with context from $PROJECT_ID ($MODE mode)'"
 fi

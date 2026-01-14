@@ -44,9 +44,47 @@ ctx reindex <project_id>
 ctx add-doc <project_id> rule "Always use TypeScript strict mode" "TS Strict"
 ctx add-doc <project_id> doc "API uses REST with JSON responses" "API Docs"
 
-# 4. Get full context for AI
-ctx get-full <project_id>
+# 4. Run opencode with context automatically injected
+ocx <project_id> "fix the authentication bug"
 ```
+
+## OpenCode Integration (ocx)
+
+The `ocx` command wraps opencode and automatically injects your project context:
+
+```bash
+# Basic usage - injects full context (rules + docs + code)
+ocx <project_id> "your prompt here"
+
+# Different context modes
+ocx -m full <project_id> "prompt"    # Full context (default)
+ocx -m rules <project_id> "prompt"   # Only project rules
+ocx -m code <project_id> "prompt"    # Only code context  
+ocx -m docs <project_id> "prompt"    # Rules + documentation
+
+# Interactive TUI mode
+ocx -i <project_id>
+
+# Quiet mode (no context summary)
+ocx -q <project_id> "prompt"
+```
+
+### What Gets Injected
+
+When you run `ocx`, the AI receives:
+
+| Mode | Rules | Docs | Code | Notes | Prompts |
+|------|-------|------|------|-------|---------|
+| full | Yes | Yes | Yes | Yes | Yes |
+| rules | Yes | - | - | - | - |
+| code | - | - | Yes | - | - |
+| docs | Yes | Yes | - | - | Yes |
+
+This means your AI assistant automatically knows:
+- Your coding standards and rules
+- Project architecture and documentation
+- Recent code structure and patterns
+- Any custom instructions you've added
 
 ## Core Commands
 
