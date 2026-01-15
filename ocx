@@ -19,6 +19,7 @@ show_help() {
     echo "Options:"
     echo "  -c, --context MODE   Context mode: full, rules, code, docs (default: full)"
     echo "  -m, --model MODEL    Model to use (default: ollama/mistral for free testing)"
+    echo "  -p, --prompt-file FILE Load message/prompt from a file"
     echo "  -a, --agent AGENT    Agent to use (enables tool access)"
     echo "  -i, --interactive    Start interactive TUI instead of run mode (has tools)"
     echo "  -q, --quiet          Don't show context summary"
@@ -43,6 +44,7 @@ show_help() {
 # Parse arguments
 CONTEXT_MODE="full"
 MODEL="opencode/big-pickle"  # Default model for testing
+PROMPT_FILE=""
 AGENT=""
 INTERACTIVE=false
 QUIET=false
@@ -55,6 +57,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -m|--model)
             MODEL="$2"
+            shift 2
+            ;;
+        -p|--prompt-file)
+            PROMPT_FILE="$2"
             shift 2
             ;;
         -a|--agent)
@@ -87,6 +93,20 @@ done
 PROJECT_ID="$1"
 shift 2>/dev/null || true
 MESSAGE="$*"
+
+if [[ -n "$PROMPT_FILE" ]]; then
+    if [[ -f "$PROMPT_FILE" ]]; then
+        FILE_CONTENT=$(cat "$PROMPT_FILE")
+        if [[ -n "$MESSAGE" ]]; then
+            MESSAGE="${FILE_CONTENT}\n\n${MESSAGE}"
+        else
+            MESSAGE="$FILE_CONTENT"
+        fi
+    else
+        echo -e "${RED}Error: Prompt file not found: $PROMPT_FILE${NC}"
+        exit 1
+    fi
+fi
 
 if [[ -z "$PROJECT_ID" ]]; then
     echo -e "${RED}Error: Project ID required${NC}"

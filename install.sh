@@ -43,8 +43,9 @@ chmod +x "$OPENCODE_HOME/bin/ocx-onboard"
 echo "  ✓ ocx-onboard (helper)"
 
 # Templates
-cp "$REPO_DIR/ONBOARDING_PROMPT_TEMPLATE.md" "$OPENCODE_HOME/templates/"
-echo "  ✓ ONBOARDING_PROMPT_TEMPLATE.md"
+echo "📄 Installing templates..."
+cp "$REPO_DIR"/templates/*.md "$OPENCODE_HOME/templates/"
+echo "  ✓ onboarding templates"
 
 # Copy optional extensions
 if [[ -f "$REPO_DIR/extensions/vector_store.py" ]]; then
