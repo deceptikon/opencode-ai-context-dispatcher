@@ -37,7 +37,12 @@ if [[ -f "$DISPATCHER_PATH" ]]; then
         sync-v)
             shift
             if [[ -x "$EXT_BIN" ]]; then
-                exec "$EXT_BIN" index "$@"
+                if [[ "$1" == "--deep" ]]; then
+                    shift
+                    exec "$EXT_BIN" index-dir "$@"
+                else
+                    exec "$EXT_BIN" index "$@"
+                fi
             else
                 echo "Error: Semantic sync extension not found."
                 exit 1

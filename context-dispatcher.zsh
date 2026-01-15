@@ -262,6 +262,7 @@ update_file_context() {
 # --------------------------------------------------------
 reindex_context() {
     local project_id="$1"
+    local subpath="$2"
     local project_dir="$PROJECTS_DIR/$project_id"
 
     if [[ ! -d "$project_dir" ]]; then
@@ -271,21 +272,34 @@ reindex_context() {
 
     local config_path="$project_dir/config.json"
     local project_path=$($JQ_CMD -r ".path" "$config_path")
-    local include_extensions=($($JQ_CMD -r ".include_extensions[]" "$config_path"))
-
-    log "Starting full reindex of $project_path..."
+    
+    local target_path="$project_path"
+    if [[ -n "$subpath" ]]; then
+        target_path="$project_path/$subpath"
+        if [[ ! -d "$target_path" && ! -f "$target_path" ]]; then
+            log "Error: Subpath '$subpath' not found in project"
+            return 1
+        fi
+        log "Targeted reindex of $target_path..."
+    else
+        log "Starting full reindex of $project_path..."
+    fi
 
     local file_list="/tmp/reindex_files_$$.txt"
     
-    # Use git ls-files if it's a git repo to respect .gitignore perfectly
+    # Use git ls-files if it's a git repo
     if [[ -d "$project_path/.git" ]]; then
-        log "Detected git repository, using git ls-files for accurate context..."
-        # -c: tracked files, -o: untracked files, --exclude-standard: respect .gitignore
-        (cd "$project_path" && git ls-files -c -o --exclude-standard) | sed "s|^|$project_path/|" > "$file_list" 2>/dev/null
+        log "Detected git repository..."
+        if [[ -n "$subpath" ]]; then
+             (cd "$project_path" && git ls-files -c -o --exclude-standard "$subpath") | sed "s|^|$project_path/|" > "$file_list" 2>/dev/null
+        else
+             (cd "$project_path" && git ls-files -c -o --exclude-standard) | sed "s|^|$project_path/|" > "$file_list" 2>/dev/null
+        fi
     else
-        log "No git repository found, using find with exclusions..."
+        log "No git repository found..."
+        local include_extensions=($($JQ_CMD -r ".include_extensions[]" "$config_path"))
         local exclude_patterns=($($JQ_CMD -r ".exclude_patterns[]" "$config_path"))
-        local find_cmd="find \"$project_path\" -type f"
+        local find_cmd="find \"$target_path\" -type f"
         
         # Add extensions filter to find command if possible for speed
         if [[ ${#include_extensions[@]} -gt 0 ]]; then
@@ -473,19 +487,21 @@ index_single_file() {
 # Extract JavaScript/TypeScript structures
 extract_js_structures() {
     LC_ALL=C grep -a -E "(function|class|const|let|var|export|import|interface|type).*[{]?$" \
-        -A 8 2>/dev/null <<< "$1" | head -30
+        -A 12 2>/dev/null <<< "$1" | head -100
 }
 
 # Extract Python structures
 extract_py_structures() {
-    LC_ALL=C grep -a -E "(def|class|import|from).*:$" \
-        -A 6 2>/dev/null <<< "$1" | head -30
+    # Include imports, classes, and function definitions with more context
+    # but still keep it summarized for the shell index
+    LC_ALL=C grep -a -E "(def|class|import|from|async def).*:$" \
+        -A 10 2>/dev/null <<< "$1" | head -100
 }
 
 # Extract Rust structures
 extract_rust_structures() {
     LC_ALL=C grep -a -E "(fn|struct|enum|impl|mod|pub).*[{]?$" \
-        -A 6 2>/dev/null <<< "$1" | head -30
+        -A 10 2>/dev/null <<< "$1" | head -100
 }
 
 # --------------------------------------------------------
@@ -675,6 +691,21 @@ add_doc() {
     
     log "Added $doc_type: $title ($doc_id)"
     echo "$doc_id"
+}
+
+# Link two documents
+link_docs() {
+    local project_id="$1"
+    local source_id="$2"
+    local target_id="$3"
+    local relation="${4:-related_to}"
+
+    if [[ -z "$project_id" ]] || [[ -z "$source_id" ]] || [[ -z "$target_id" ]]; then
+        echo "Usage: ctx link <project_id> <source_id> <target_id> [relation]"
+        return 1
+    fi
+
+    add_doc "$project_id" "note" "Relation: $relation to $target_id" "Link: $source_id -> $target_id"
 }
 
 # Add document from file
@@ -904,7 +935,7 @@ context() {
             update_context "$2"
             ;;
         reindex)
-            reindex_context "$2"
+            reindex_context "$2" "$3"
             ;;
         get)
             get_context "$2" "$3" "$4"
@@ -923,6 +954,9 @@ context() {
             ;;
         add-file)
             add_doc_file "$2" "$3" "$4" "$5"
+            ;;
+        link)
+            link_docs "$2" "$3" "$4" "$5"
             ;;
         list-docs)
             list_docs "$2" "$3"
