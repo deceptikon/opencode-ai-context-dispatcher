@@ -92,6 +92,27 @@ generate_project_id() {
     echo -n "$1" | shasum -a 256 | cut -d' ' -f1 | cut -c 1-16
 }
 
+# Check if a file should be excluded based on patterns
+is_file_excluded() {
+    local file_path="$1"
+    local exclude_patterns=(${@:2})
+    
+    for pattern in "${exclude_patterns[@]}"; do
+        if [[ "$file_path" == *"/$pattern/"* || "$file_path" == *"/$pattern" || "$file_path" == "$pattern/"* || "$file_path" == "$pattern" ]]; then
+            return 0 # Should exclude
+        fi
+        # Handle glob-like patterns in exclusions (simple version)
+        if [[ "$pattern" == *"*"* ]]; then
+            local regex_pattern="${pattern//./\\.}"
+            regex_pattern="${regex_pattern//\*/.*}"
+            if [[ "$file_path" =~ "$regex_pattern" ]]; then
+                return 0 # Should exclude
+            fi
+        fi
+    done
+    return 1 # Should not exclude
+}
+
 # Helper: Get project config path
 get_project_config() {
     local project_id="$1"
@@ -157,7 +178,7 @@ init_context() {
             created: $created,
             last_indexed: null,
             indexing_strategy: "git_latest+function_extract",
-            exclude_patterns: ["node_modules", ".git", "dist", "build", "*.log", "*.tmp", "__pycache__", ".mypy_cache", ".pytest_cache", "*.pyc", "target", "out", "coverage", "*.min.*", "*.map", ".DS_Store", ".ruff_cache", ".venv", "venv", "env", ".env", ".idea", ".vscode", "*.lock", ".cache", "tmp", ".brv", "vendor", "bower_components", ".next", ".nuxt", ".output", ".svelte-kit", "out-tsc", ".parcel-cache", ".cache-loader", ".eslintcache", ".stylelintcache", ".docz", ".cache", ".nyc_output", ".dynamodb", ".serverless", ".webpack", ".meteor"],
+            exclude_patterns: ["node_modules", ".git", "dist", "build", "*.log", "*.tmp", "__pycache__", ".mypy_cache", ".pytest_cache", "*.pyc", "target", "out", "coverage", "*.min.*", "*.map", ".DS_Store", ".ruff_cache", ".venv", "venv", "env", ".env", ".idea", ".vscode", "*.lock", ".cache", "tmp", ".brv", "vendor", "bower_components", ".next", ".nuxt", ".output", ".svelte-kit", "out-tsc", ".parcel-cache", ".cache-loader", ".eslintcache", ".stylelintcache", ".docz", ".cache", ".nyc_output", ".dynamodb", ".serverless", ".webpack", ".meteor", ".swc", ".cache", ".vercel", ".turbo", "out", "bundle.js", "*.chunk.js", "*.bundle.js", "*.min.js", ".pnpm-store", ".yarn", ".npm", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb"],
             include_extensions: [".js", ".jsx", ".ts", ".tsx", ".py", ".rs", ".go", ".java", ".cpp", ".c", ".h", ".hpp", ".rb", ".php", ".swift", ".kt", ".scala", ".zsh", ".sh", ".bash", ".md", ".yaml", ".yml", ".json", ".sql", ".conf", ".ini", ".env", ".toml", ".mdx"],
             chunk_size: 2000,
             max_files: 1000
@@ -395,6 +416,47 @@ reindex_context() {
     log "Reindexed $total_files files for project $project_id"
 }
 
+# Prune index: remove files matching exclude_patterns from index.json
+prune_context() {
+    local project_id="$1"
+    local project_dir="$PROJECTS_DIR/$project_id"
+    local index_file="$project_dir/index.json"
+    local config_file="$project_dir/config.json"
+
+    if [[ ! -f "$index_file" ]]; then
+        log "Error: Index not found for project $project_id"
+        return 1
+    fi
+
+    log "Pruning index for project $project_id..."
+    local exclude_patterns=($($JQ_CMD -r ".exclude_patterns[]" "$config_file"))
+    local files=($($JQ_CMD -r ".files | keys[]" "$index_file"))
+    local count=0
+
+    for file in "${files[@]}"; do
+        if is_file_excluded "$file" "${exclude_patterns[@]}"; then
+            log "  Removing excluded file: $file"
+            
+            # Remove from files object and remove its chunks
+            local updated_index="/tmp/pruned_index_$$.json"
+            
+            # Get chunk IDs for this file
+            local chunk_ids=($($JQ_CMD -r ".files[\"$file\"].chunks[]" "$index_file"))
+            
+            # Build jq command to remove file and all its chunks
+            local jq_filter="del(.files[\"$file\"])"
+            for cid in "${chunk_ids[@]}"; do
+                jq_filter="$jq_filter | del(.chunks[] | select(.id == \"$cid\"))"
+            done
+            
+            $JQ_CMD "$jq_filter" "$index_file" > "$updated_index" && mv "$updated_index" "$index_file"
+            count=$((count + 1))
+        fi
+    done
+
+    log "Pruned $count files from project $project_id"
+}
+
 # Helper: Index a single file
 index_single_file() {
     local project_id="$1"
@@ -402,8 +464,18 @@ index_single_file() {
     local rel_path="$3"
 
     local project_dir="$PROJECTS_DIR/$project_id"
+    local config_file="$project_dir/config.json"
     local index_file="$project_dir/index.json"
-    local chunk_size=$($JQ_CMD -r ".chunk_size" "$project_dir/config.json")
+    
+    # Check exclusion list
+    local exclude_patterns=($($JQ_CMD -r ".exclude_patterns[]" "$config_file"))
+    if is_file_excluded "$rel_path" "${exclude_patterns[@]}"; then
+        # If it's in the index but now excluded, remove it?
+        # For now just skip indexing
+        return
+    fi
+
+    local chunk_size=$($JQ_CMD -r ".chunk_size" "$config_file")
 
     # Create index file if doesn't exist
     if [[ ! -f "$index_file" ]]; then
@@ -936,6 +1008,9 @@ context() {
             ;;
         reindex)
             reindex_context "$2" "$3"
+            ;;
+        prune)
+            prune_context "$2"
             ;;
         get)
             get_context "$2" "$3" "$4"
