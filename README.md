@@ -7,11 +7,14 @@ A shell-based context management system for AI coding agents. Automatically inde
 - Automatic project context indexing and tracking
 - **Git-aware indexing**: Automatically respects `.gitignore` rules
 - **Expanded exclusions**: Built-in protection against indexing `node_modules`, `.git`, `.next`, `.brv`, and other build/dev noise
+- **Auto-titling**: Manual documents automatically get a title from their first line if not specified
 - Code structure extraction (functions, classes, methods)
 - Git-aware incremental updates
+- **Cross-repo environment syncing**: Easily sync `.env` variables between projects
 - **Manual documentation support** (rules, docs, notes, prompts)
 - Agent-specific context storage and retrieval
 - Cross-platform support (Linux/macOS)
+- **Context Diffs**: See what changed in the project knowledge since your last session
 - **Integrated semantic search**: ChromaDB + LlamaIndex available directly via `ctx search-v` and `ctx sync-v`
 - **Background syncing**: Semantic index automatically updates after reindexing or updates
 
@@ -133,7 +136,32 @@ ctx search-v <project_id> "how does auth work?"  # Semantic search for logic
 ctx get <project_id>              # Get code context
 ctx get <project_id> "query"      # Search code context (keyword-based)
 ctx get-full <project_id>         # Get everything (code + docs + rules)
+ctx diff <project_id> [days]      # Show recently added context (default: 1 day)
 ```
+
+### Documentation & Rules
+
+Add business logic, rules, documentation, and custom prompts that persist alongside your code context.
+
+**Auto-titling**: If you omit the title, the dispatcher will use the first line of content (trimmed).
+
+```bash
+# Add inline content
+ctx add-doc <project_id> <type> "content" [title]
+
+# Types: rule, doc, note, prompt
+ctx add-doc abc123 rule "# Always use strict typing"  # Auto-titled as "Always use strict typing"
+ctx add-doc abc123 doc "The auth system uses JWT tokens" "Auth Overview"
+```
+
+### Environment & Cross-Repo Sync
+
+Sync environment variables between projects (e.g., from Backend to Frontend):
+
+```bash
+ctx sync-env <source_id> <target_id> KEY1 KEY2 ...
+```
+
 
 ### Documentation & Rules
 

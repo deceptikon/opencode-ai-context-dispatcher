@@ -783,12 +783,19 @@ add_doc() {
     local project_id="$1"
     local doc_type="$2"  # rule, doc, note, prompt
     local content="$3"
-    local title="${4:-untitled}"
+    local title="$4"
 
     if [[ -z "$project_id" ]] || [[ -z "$doc_type" ]] || [[ -z "$content" ]]; then
         echo "Usage: ctx add-doc <project_id> <type> <content> [title]"
         echo "Types: rule, doc, note, prompt"
         return 1
+    fi
+
+    # Auto-generate title if missing or 'untitled'
+    if [[ -z "$title" || "$title" == "untitled" ]]; then
+        # Take first non-empty line, strip markdown headers, trim to 50 chars
+        title=$(echo "$content" | grep -v '^\s*$' | head -n 1 | sed 's/^[#* ]*//' | cut -c 1-50)
+        [[ -z "$title" ]] && title="untitled-$(date +%H%M%S)"
     fi
 
     local project_docs="$DOCS_DIR/$project_id"
@@ -808,6 +815,92 @@ add_doc() {
     
     log "Added $doc_type: $title ($doc_id)"
     echo "$doc_id"
+}
+
+# Diff context: see what changed recently
+diff_context() {
+    local project_id="$1"
+    local days="${2:-1}"
+    local doc_file="$DOCS_DIR/$project_id/docs.jsonl"
+
+    if [[ ! -f "$doc_file" ]]; then
+        echo "No documents found for project $project_id"
+        return
+    fi
+
+    local since_ts=$(get_timestamp_days_ago "$days")
+    
+    echo "Changes in project $project_id since $days day(s) ago:"
+    echo "--------------------------------------------------------"
+    
+    # Use jq to filter by timestamp
+    # Note: timestamp is ISO, so we need to parse it or use string comparison if ISO
+    $JQ_CMD -r --arg since "$(date -d "$days days ago" -Iseconds 2>/dev/null || date -v-${days}d -Iseconds)" \
+        'select(.timestamp >= $since) | "[\(.timestamp)] [\(.type)] \(.title) (\(.id))"' "$doc_file"
+}
+
+# Sync environment variables between projects
+sync_env() {
+    local src_id=$(resolve_id "$1")
+    local dest_id=$(resolve_id "$2")
+    shift 2
+    local keys=("$@")
+
+    if [[ -z "$src_id" || -z "$dest_id" ]]; then
+        echo "Usage: ctx sync-env <src_id> <dest_id> [key1 key2 ...]"
+        return 1
+    fi
+
+    local src_path=$($JQ_CMD -r ".path" "$(get_project_config "$src_id")")
+    local dest_path=$($JQ_CMD -r ".path" "$(get_project_config "$dest_id")")
+    
+    local src_env="$src_path/.env"
+    local dest_env="$dest_path/.env"
+
+    if [[ ! -f "$src_env" ]]; then
+        echo "Error: Source .env not found at $src_env"
+        return 1
+    fi
+
+    if [[ ! -f "$dest_env" ]]; then
+        echo "Warning: Destination .env not found at $dest_env, creating it..."
+        touch "$dest_env"
+    fi
+
+    echo "Syncing env from $src_id to $dest_id..."
+
+    if [[ ${#keys[@]} -eq 0 ]]; then
+        # If no keys specified, show differences or ask? 
+        # For now, just list what's in src
+        echo "Source keys available:"
+        grep -v '^#' "$src_env" | grep '=' | cut -d'=' -f1
+        return 0
+    fi
+
+    for key in "${keys[@]}"; do
+        local value=$(grep "^$key=" "$src_env" | cut -d'=' -f2-)
+        if [[ -z "$value" ]]; then
+            echo "  ⚠️  Key $key not found in source"
+            continue
+        fi
+
+        if grep -q "^$key=" "$dest_env"; then
+            # Update existing
+            if [[ "$PLATFORM" == "macos" ]]; then
+                sed -i '' "s|^$key=.*|$key=$value|" "$dest_env"
+            else
+                sed -i "s|^$key=.*|$key=$value|" "$dest_env"
+            fi
+            echo "  ✅ Updated $key"
+        else
+            # Append new
+            echo "$key=$value" >> "$dest_env"
+            echo "  ✅ Added $key"
+        fi
+    done
+    
+    # Add a note to context about the sync
+    add_doc "$dest_id" "note" "Synced environment variables ($*) from project $src_id" "Env Sync" > /dev/null
 }
 
 # Link two documents
@@ -1008,8 +1101,15 @@ ctx get-docs $project_id rule
 
 ## 🛠 Essential Commands
 - \`ctx list-docs $project_id\` - See all available documentation
+- \`ctx diff $project_id\` - See what changed recently in the context
 - \`ctx stats $project_id\` - Check indexing status
 - \`ctx update $project_id\` - Sync latest git changes to context
+
+## 🔗 Cross-Project Sync
+If you need to sync environment variables from another project:
+\`\`\`bash
+ctx sync-env <source_project_id> $project_id SECRET_KEY API_URL
+\`\`\`
 
 ## ✍️ Contributing to Context
 When you discover a new pattern, fix a complex bug, or identify a recurring issue, **save it for future agents**:
@@ -1046,7 +1146,8 @@ context() {
             init_context "$2" "$3"
             ;;
         init-agent)
-            generate_agent_guide "$2"
+            local id=$(resolve_id "$2")
+            generate_agent_guide "$id"
             ;;
         update)
             local id=$(resolve_id "$2")
@@ -1086,6 +1187,18 @@ context() {
             local id=$(resolve_id "$2")
             list_docs "$id" "$3"
             ;;
+        get-docs)
+            local id=$(resolve_id "$2")
+            get_docs "$id" "$3"
+            ;;
+        edit-doc)
+            local id=$(resolve_id "$2")
+            edit_doc "$id" "$3"
+            ;;
+        rm-doc)
+            local id=$(resolve_id "$2")
+            remove_doc "$id" "$3"
+            ;;
         stats)
             local id=$(resolve_id "$2")
             project_stats "$id"
@@ -1097,67 +1210,22 @@ context() {
             local id=$(resolve_id "$2")
             prune_context "$id"
             ;;
-        search-v|semantic-search)
-            # Handled by ctx wrapper but for consistency:
+        diff)
             local id=$(resolve_id "$2")
-            # ...
+            diff_context "$id" "$3"
             ;;
-
-        init-agent)
-            generate_agent_guide "$2"
-            ;;
-        update)
-            update_context "$2"
-            ;;
-        reindex)
-            reindex_context "$2" "$3"
-            ;;
-        prune)
-            prune_context "$2"
-            ;;
-        get)
-            get_context "$2" "$3" "$4"
-            ;;
-        get-full)
-            get_full_context "$2" "$3"
-            ;;
-        save-agent)
-            save_agent_context "$2" "$3" "$4"
-            ;;
-        search-agent)
-            search_agent_context "$2" "$3"
-            ;;
-        add-doc)
-            add_doc "$2" "$3" "$4" "$5"
-            ;;
-        add-file)
-            add_doc_file "$2" "$3" "$4" "$5"
-            ;;
-        link)
-            link_docs "$2" "$3" "$4" "$5"
-            ;;
-        list-docs)
-            list_docs "$2" "$3"
-            ;;
-        get-docs)
-            get_docs "$2" "$3"
-            ;;
-        edit-doc)
-            edit_doc "$2" "$3"
-            ;;
-        rm-doc)
-            remove_doc "$2" "$3"
-            ;;
-        list)
-            list_projects
-            ;;
-        stats)
-            project_stats "$2"
+        sync-env)
+            sync_env "$2" "$3" "${@:4}"
             ;;
         cleanup)
             cleanup_old_context "$2"
             ;;
-         help|*)
+        search-v|semantic-search)
+            # Handled by ctx wrapper but for consistency:
+            local id=$(resolve_id "$2")
+            # This part is usually bypassed by the 'ctx' wrapper
+            ;;
+        help|*)
             echo "Context Dispatcher Commands:"
             echo ""
             echo "Project Management:"
@@ -1167,6 +1235,7 @@ context() {
             echo "  reindex <project_id>     Full reindex of project"
             echo "  list                     List all managed projects"
             echo "  stats <project_id>       Show project statistics"
+            echo "  prune <project_id>       Remove excluded files from index"
             echo ""
             echo "Semantic Search (Vector Store):"
             echo "  sync-v <id>              Sync project to semantic index"
@@ -1175,6 +1244,7 @@ context() {
             echo "Context Retrieval:"
             echo "  get <project_id> [query] Get code context (optional search)"
             echo "  get-full <project_id>    Get full context (code + docs + rules)"
+            echo "  diff <project_id> [days] Show recently added context"
             echo ""
             echo "Documentation & Rules:"
             echo "  add-doc <id> <type> <text> [title]  Add doc (types: rule/doc/note/prompt)"
@@ -1183,6 +1253,9 @@ context() {
             echo "  get-docs <id> [type]                Get document contents"
             echo "  edit-doc <id> <doc_id>              Edit document in \$EDITOR"
             echo "  rm-doc <id> <doc_id>                Remove a document"
+            echo ""
+            echo "Environment & Cross-Repo:"
+            echo "  sync-env <src> <dest> [keys...]     Sync .env vars between projects"
             echo ""
             echo "Agent Context:"
             echo "  save-agent <name> <text> Save agent-specific context"
@@ -1193,6 +1266,7 @@ context() {
             ;;
     esac
 }
+
 
 # alias ctx="source ~/.opencode/context-dispatcher.zsh && ~/.opencode/context"
 # pwd
