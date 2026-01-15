@@ -675,24 +675,69 @@ search_agent_context() {
     fi
 }
 
-# --------------------------------------------------------
-# Utility Commands
-# --------------------------------------------------------
+# List projects with shortcuts
 list_projects() {
     echo "Managed Projects:"
-    local name path last project_id
+    local name path last project_id shortcut
+    local i=1
+    
+    # Header for shortcuts
+    echo "SHORTCUT  ID                NAME (PATH)"
+    echo "--------  ----------------  ----------------"
+    
+    # We'll use a temp file to store the map for the current session
+    local map_file="$CACHE_DIR/project_shortcuts.map"
+    echo "# Project Shortcuts Map" > "$map_file"
+
     for project_dir in "$PROJECTS_DIR"/*; do
-        if [[ -f "$project_dir/config.json" ]]; then
+        if [[ -d "$project_dir" && -f "$project_dir/config.json" ]]; then
             name=$($JQ_CMD -r ".name" "$project_dir/config.json")
             path=$($JQ_CMD -r ".path" "$project_dir/config.json")
-            last=$($JQ_CMD -r ".last_indexed // \"never\"" "$project_dir/config.json")
             project_id=$($BASENAME_CMD "$project_dir")
-            echo "  - $name ($project_id)"
-            echo "    Path: $path"
-            echo "    Last indexed: $last"
-            echo
+            
+            # Generate shortcut: First letter of project name + counter
+            # Using parameter expansion and zsh built-ins for speed and reliability
+            local char=${name[1]}
+            local first_char=${(U)char}
+            shortcut="CTX_${first_char}${i}"
+            
+            printf "%-8s  %-16s  %s (%s)\n" "$shortcut" "$project_id" "$name" "$path"
+            
+            # Save to map
+            echo "$shortcut=$project_id" >> "$map_file"
+            
+            # Export as ENV variable for current session
+            # Note: Dash/underscore are safer for env vars
+            export "$shortcut=$project_id"
+            
+            i=$((i + 1))
         fi
     done
+    
+    echo ""
+    echo "💡 Shortcuts are exported as ENV variables (e.g., \$CTX-F1)."
+    echo "   You can use them in commands: ocx \$CTX-F1"
+}
+
+# Resolve ID from shortcut if needed
+resolve_id() {
+    local input="$1"
+    if [[ "$input" == CTX_* ]]; then
+        # Check if it's an environment variable
+        local val=$(eval echo "\$$input")
+        if [[ -n "$val" ]]; then
+            echo "$val"
+            return
+        fi
+        
+        # Fallback to map file
+        local map_file="$CACHE_DIR/project_shortcuts.map"
+        if [[ -f "$map_file" ]]; then
+            grep "^$input=" "$map_file" | head -n 1 | cut -d'=' -f2
+            return
+        fi
+    fi
+    echo "$input"
 }
 
 project_stats() {
@@ -1000,6 +1045,64 @@ context() {
         init)
             init_context "$2" "$3"
             ;;
+        init-agent)
+            generate_agent_guide "$2"
+            ;;
+        update)
+            local id=$(resolve_id "$2")
+            update_context "$id"
+            ;;
+        reindex)
+            local id=$(resolve_id "$2")
+            reindex_context "$id" "$3"
+            ;;
+        get)
+            local id=$(resolve_id "$2")
+            get_context "$id" "$3" "$4"
+            ;;
+        get-full)
+            local id=$(resolve_id "$2")
+            get_full_context "$id" "$3"
+            ;;
+        save-agent)
+            save_agent_context "$2" "$3" "$4"
+            ;;
+        search-agent)
+            search_agent_context "$2" "$3"
+            ;;
+        add-doc)
+            local id=$(resolve_id "$2")
+            add_doc "$id" "$3" "$4" "$5"
+            ;;
+        add-file)
+            local id=$(resolve_id "$2")
+            add_doc_file "$id" "$3" "$4" "$5"
+            ;;
+        link)
+            local id=$(resolve_id "$2")
+            link_docs "$id" "$3" "$4" "$5"
+            ;;
+        list-docs)
+            local id=$(resolve_id "$2")
+            list_docs "$id" "$3"
+            ;;
+        stats)
+            local id=$(resolve_id "$2")
+            project_stats "$id"
+            ;;
+        list)
+            list_projects
+            ;;
+        prune)
+            local id=$(resolve_id "$2")
+            prune_context "$id"
+            ;;
+        search-v|semantic-search)
+            # Handled by ctx wrapper but for consistency:
+            local id=$(resolve_id "$2")
+            # ...
+            ;;
+
         init-agent)
             generate_agent_guide "$2"
             ;;

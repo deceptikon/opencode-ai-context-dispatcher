@@ -90,7 +90,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-PROJECT_ID="$1"
+# Load context dispatcher to use resolve_id
+DISPATCHER_PATH="$HOME/.opencode/context-dispatcher.zsh"
+if [[ ! -f "$DISPATCHER_PATH" ]]; then
+    # Fallback to repo dir if not installed
+    DISPATCHER_PATH="$(dirname "$0")/context-dispatcher.zsh"
+fi
+
+if [[ -f "$DISPATCHER_PATH" ]]; then
+    source "$DISPATCHER_PATH"
+fi
+
+PROJECT_ID=$(resolve_id "$1")
 shift 2>/dev/null || true
 MESSAGE="$*"
 

@@ -27,8 +27,11 @@ if [[ -f "$DISPATCHER_PATH" ]]; then
     case "$1" in
         semantic-search|search-v)
             shift
+            # Resolve shortcut if first arg is CTX-*
+            local target_id=$(resolve_id "$1")
+            shift
             if [[ -x "$EXT_BIN" ]]; then
-                exec "$EXT_BIN" search "$@"
+                exec "$EXT_BIN" search "$target_id" "$@"
             else
                 echo "Error: Semantic search extension not found."
                 exit 1
@@ -36,12 +39,18 @@ if [[ -f "$DISPATCHER_PATH" ]]; then
             ;;
         sync-v)
             shift
+            local deep=false
+            if [[ "$1" == "--deep" ]]; then
+                deep=true
+                shift
+            fi
+            local target_id=$(resolve_id "$1")
+            shift
             if [[ -x "$EXT_BIN" ]]; then
-                if [[ "$1" == "--deep" ]]; then
-                    shift
-                    exec "$EXT_BIN" index-dir "$@"
+                if [[ "$deep" == "true" ]]; then
+                    exec "$EXT_BIN" index-dir "$target_id" "$@"
                 else
-                    exec "$EXT_BIN" index "$@"
+                    exec "$EXT_BIN" index "$target_id" "$@"
                 fi
             else
                 echo "Error: Semantic sync extension not found."
